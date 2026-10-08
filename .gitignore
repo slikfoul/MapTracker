@@ -1,0 +1,13 @@
+bin/
+obj/
+package/MapTracker.dll
+*.zip
+*.log
+*.inspect.txt
+*.inspect.json
+inspect_minimap_assets.py
+assets/references/
+NEXT_STEPS.md
+migration/
+.vs/
+*.user
