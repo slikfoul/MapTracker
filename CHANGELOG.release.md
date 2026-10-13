@@ -17,6 +17,6 @@
 - Radius-based grouping of creature names into centered same-species captions, enabled by default with a 15-meter radius.
 - Separate Minimap and Large map settings, solid black silhouette outlines and an 800-meter maximum group span, default 400.
 - Optional notifications for new dungeon entrances and selected static object types.
-- Optional marker sharing and Alt + middle-click shared navigation for objects and arbitrary map locations, preserving personal navigation.
+- Optional marker sharing and independently configurable shared navigation for objects and arbitrary map locations, default Alt + middle-click, preserving personal navigation.
 - Three-state target highlighting on both maps and stacked navigation summaries in the lower-left large-map corner.
 - Shared static discoveries in a unified marker set, distant ally observations and independent optional creature-position transmission, disabled by default.

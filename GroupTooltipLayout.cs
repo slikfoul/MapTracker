@@ -5,6 +5,24 @@ namespace MapTracker
 {
     internal static class GroupTooltipLayout
     {
+        internal sealed class Placement
+        {
+            private bool placed;
+            private LabelBox previous;
+            private float previousX, previousY;
+            internal void Reset() { placed = false; }
+            internal bool TryPlace(IReadOnlyList<LabelBox> members, LabelBox area, float width, float height,
+                float anchorX, float anchorY, float gap, out LabelBox result)
+            {
+                var retained = new LabelBox(previous.X + anchorX - previousX, previous.Y + anchorY - previousY,
+                    Math.Min(width, area.Width), Math.Min(height, area.Height));
+                if (placed && retained.Width > 0 && retained.Height > 0 && LabelLayout.Inside(retained, area) && Free(retained, members, gap))
+                    result = retained;
+                else if (!GroupTooltipLayout.TryPlace(members, area, width, height, anchorX, anchorY, gap, out result)) return false;
+                previous = result; previousX = anchorX; previousY = anchorY; placed = true;
+                return true;
+            }
+        }
         private static float Clamp(float value, float low, float high) => Math.Max(low, Math.Min(high, value));
         private static bool Free(LabelBox panel, IReadOnlyList<LabelBox> members, float gap)
         {

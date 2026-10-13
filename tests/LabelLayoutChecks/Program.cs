@@ -17,6 +17,33 @@ Check(GroupTooltipLayout.TryPlace(withLabels, tooltipArea, 320, 348, 700, 350, 2
     "group popup placement also protects visible member names");
 Check(!GroupTooltipLayout.TryPlace(new[] { tooltipArea }, tooltipArea, 320, 348, 600, 400, 20, out _),
     "when the entire viewport is occupied no popup is placed over protected objects");
+var retainedTooltip = new GroupTooltipLayout.Placement();
+Check(retainedTooltip.TryPlace(edgeCloud, tooltipArea, 320, 348, 80, 350, 20, out var retainedInitial),
+    "a selected edge group gets an initial stable popup position");
+bool remainedFixed = true;
+for (int frame = 0; frame < 120; frame++)
+{
+    remainedFixed &= retainedTooltip.TryPlace(edgeCloud, tooltipArea, 320, 348, 80, 350, 20, out var next) &&
+        next.X == retainedInitial.X && next.Y == retainedInitial.Y;
+}
+Check(remainedFixed, "repeated frames retain one popup position for an unchanged expanded group");
+var newCaption = new LabelBox(retainedInitial.X + 10, retainedInitial.Y + 10, 50, 20);
+var temporaryCaptions = edgeCloud.Concat(new[] { newCaption }).ToArray();
+Check(retainedTooltip.TryPlace(temporaryCaptions, tooltipArea, 320, 348, 80, 350, 20, out var movedForCaption) &&
+    NoCover(movedForCaption, temporaryCaptions), "a genuinely new member caption relocates the panel to free space");
+Check(retainedTooltip.TryPlace(edgeCloud, tooltipArea, 320, 348, 80, 350, 20, out var afterCaption) &&
+    afterCaption.X == movedForCaption.X && afterCaption.Y == movedForCaption.Y,
+    "a caption disappearing does not snap the panel back and create an up-down oscillation");
+var pannedCloud = edgeCloud.Select(p => new LabelBox(p.X + 40, p.Y - 20, p.Width, p.Height)).ToArray();
+Check(retainedTooltip.TryPlace(pannedCloud, tooltipArea, 320, 348, 120, 330, 20, out var pannedPanel) &&
+    pannedPanel.X == afterCaption.X + 40 && pannedPanel.Y == afterCaption.Y - 20 && NoCover(pannedPanel, pannedCloud),
+    "dragging the map moves a retained panel with its group instead of jumping to a different side");
+Check(!retainedTooltip.TryPlace(new[] { tooltipArea }, tooltipArea, 320, 348, 120, 330, 20, out _),
+    "cached placement never overrides actual icon or caption collisions");
+retainedTooltip.Reset();
+Check(retainedTooltip.TryPlace(portalCloud, tooltipArea, 320, 348, 700, 350, 20, out var resetPanel) &&
+    resetPanel.X == portalPopup.X && resetPanel.Y == portalPopup.Y,
+    "opening a different group resets retained placement to that group's left-side position");
 Check(Choose().Length == 0, "an empty minimap has no labels");
 Check(Choose(new(0, 0, 80, 14), new(100, 0, 80, 14)).All(v => v), "separated creature names remain visible");
 Check(Choose(new(0, 0, 80, 14), new(40, 3, 80, 14)).SequenceEqual(new[] { true, false }), "nearest-first priority hides a colliding name");

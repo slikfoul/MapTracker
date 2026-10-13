@@ -627,6 +627,30 @@ Check(ButtonMatches(new BepInEx.Configuration.KeyboardShortcut(KeyCode.Mouse0, K
 Check(ButtonMatches(new BepInEx.Configuration.KeyboardShortcut(KeyCode.G, KeyCode.LeftControl), KeyCode.G, KeyCode.LeftControl) &&
     !ButtonMatches(new BepInEx.Configuration.KeyboardShortcut(KeyCode.None), KeyCode.None),
     "keyboard navigation combinations are supported and an unbound selection key stays disabled");
+var bindingAction = typeof(MarkerFile).Assembly.GetType("MapTracker.MapTargetGesture").GetMethod("BindingAction", lifetimeFlags);
+var personalBinding = new BepInEx.Configuration.KeyboardShortcut(KeyCode.Mouse0, KeyCode.LeftAlt);
+var defaultSharingBinding = new BepInEx.Configuration.KeyboardShortcut(KeyCode.Mouse2, KeyCode.LeftAlt);
+string BindingResult(BepInEx.Configuration.KeyboardShortcut share, KeyCode button, bool enabled, params KeyCode[] held) =>
+    bindingAction.Invoke(null, new object[] { personalBinding, share, button, (Func<KeyCode, bool>)(key => held.Contains(key)), enabled }).ToString();
+Check(BindingResult(defaultSharingBinding, KeyCode.Mouse2, true, KeyCode.RightAlt) == "Share" &&
+    BindingResult(defaultSharingBinding, KeyCode.Mouse0, true, KeyCode.LeftAlt) == "Select",
+    "independent default selection and sharing bindings work with either Alt key");
+var customSharingBinding = new BepInEx.Configuration.KeyboardShortcut(KeyCode.Mouse1, KeyCode.LeftControl);
+Check(BindingResult(customSharingBinding, KeyCode.Mouse1, true, KeyCode.LeftControl) == "Share" &&
+    BindingResult(customSharingBinding, KeyCode.Mouse1, true) == "None" &&
+    BindingResult(customSharingBinding, KeyCode.Mouse2, true, KeyCode.LeftAlt) == "None",
+    "rebinding sharing to Control-right-click requires Control and releases the former Alt-middle-click action");
+Check(BindingResult(defaultSharingBinding, KeyCode.Mouse2, false, KeyCode.LeftAlt) == "None" &&
+    BindingResult(defaultSharingBinding, KeyCode.Mouse0, false, KeyCode.LeftAlt) == "Select",
+    "turning discovery sharing off blocks the sharing shortcut without disabling personal navigation");
+Check(BindingResult(new BepInEx.Configuration.KeyboardShortcut(KeyCode.H, KeyCode.LeftShift), KeyCode.H, true, KeyCode.LeftShift) == "Share" &&
+    BindingResult(new BepInEx.Configuration.KeyboardShortcut(KeyCode.Mouse3), KeyCode.Mouse3, true) == "Share",
+    "sharing supports keyboard combinations and extra mouse buttons");
+Check(BindingResult(personalBinding, KeyCode.Mouse0, true, KeyCode.LeftAlt) == "Share" &&
+    BindingResult(personalBinding, KeyCode.Mouse0, false, KeyCode.LeftAlt) == "Select",
+    "overlapping bindings dispatch one action with explicit sharing priority");
+Check(BindingResult(new BepInEx.Configuration.KeyboardShortcut(KeyCode.None), KeyCode.Mouse2, true, KeyCode.LeftAlt) == "None",
+    "clearing the shared-navigation binding does not leave a hardcoded sharing gesture");
 string navigationConfigFolder = Path.Combine(Path.GetTempPath(), "MapTrackerNavigationChecks-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(navigationConfigFolder);
 try
@@ -634,12 +658,19 @@ try
     string configPath = Path.Combine(navigationConfigFolder, "navigation.cfg");
     var config = new BepInEx.Configuration.ConfigFile(configPath, false);
     var selectionKey = config.Bind("Navigation", "Select navigation key", new BepInEx.Configuration.KeyboardShortcut(KeyCode.Mouse2));
+    var sharingKey = config.Bind("Navigation", "Share navigation key", defaultSharingBinding);
     selectionKey.Value = new BepInEx.Configuration.KeyboardShortcut(KeyCode.Mouse0, KeyCode.LeftAlt);
+    sharingKey.Value = customSharingBinding;
     config.Save();
     var reloaded = new BepInEx.Configuration.ConfigFile(configPath, false);
     var restoredKey = reloaded.Bind("Navigation", "Select navigation key", new BepInEx.Configuration.KeyboardShortcut(KeyCode.Mouse2));
+    var restoredSharingKey = reloaded.Bind("Navigation", "Share navigation key", defaultSharingBinding);
     Check(ButtonMatches(restoredKey.Value, KeyCode.Mouse0, KeyCode.LeftAlt) && !ButtonMatches(restoredKey.Value, KeyCode.Mouse2),
         "changed navigation mouse button and modifier survive a configuration reload");
+    Check(ButtonMatches(restoredSharingKey.Value, KeyCode.Mouse1, KeyCode.LeftControl) &&
+        !ButtonMatches(restoredSharingKey.Value, KeyCode.Mouse2, KeyCode.LeftAlt) &&
+        ButtonMatches(restoredKey.Value, KeyCode.Mouse0, KeyCode.LeftAlt),
+        "the sharing shortcut persists independently of the personal navigation shortcut");
 }
 finally { foreach (string path in Directory.GetFiles(navigationConfigFolder)) File.Delete(path); Directory.Delete(navigationConfigFolder); }
 var sharedGoal = new NavigationShare { world = "123", name = "Portal: North", type = "prefab:portal_wood", objectId = "123:42", position = new Vector3(100, 20, -50) };

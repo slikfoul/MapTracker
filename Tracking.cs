@@ -558,6 +558,7 @@ namespace MapTracker
             creatureNameGroups.Apply(records.Values, map, host);
             largeLabels.Apply(records.Values, map, host);
             EnforceNameVisibility();
+            grouping.DrawTooltip(map, Name);
             ApplySharedPinVisibility(map);
         }
         private void ApplySharedPinVisibility(Minimap currentMap)
@@ -688,19 +689,26 @@ namespace MapTracker
             return !typing && Chat.instance?.HasFocus() != true && !global::Console.IsVisible() &&
                 !TextInput.IsVisible() && !InventoryGui.IsVisible() && !Menu.IsVisible();
         }
-        internal bool NavigationMouse(KeyCode button) => NavigationAvailable() &&
-            MapTargetGesture.Matches(host.SelectNavigationKey.Value, button, Input.GetKey);
+        private NavigationBindingAction NavigationBinding(KeyCode button) => NavigationAvailable() ?
+            MapTargetGesture.BindingAction(host.SelectNavigationKey.Value, host.ShareNavigationKey.Value, button, Input.GetKey, host.ShareMarkers.Value) :
+            NavigationBindingAction.None;
+        internal bool NavigationMouse(KeyCode button) => NavigationBinding(button) == NavigationBindingAction.Select;
+        internal bool ShareNavigationMouse(KeyCode button) => NavigationBinding(button) == NavigationBindingAction.Share;
+        private static bool UnhookedNavigationKey(KeyCode key) => key != KeyCode.None &&
+            key != KeyCode.Mouse0 && key != KeyCode.Mouse1 && key != KeyCode.Mouse2;
         internal void HandleNavigationKey()
         {
-            var key = host.SelectNavigationKey.Value;
-            if (!NavigationAvailable() ||
-                key.MainKey == KeyCode.Mouse0 || key.MainKey == KeyCode.Mouse1 || key.MainKey == KeyCode.Mouse2 || !key.IsDown()) return;
+            if (!NavigationAvailable()) return;
+            var shareKey = host.ShareNavigationKey.Value.MainKey;
+            bool share = UnhookedNavigationKey(shareKey) && Input.GetKeyDown(shareKey) && ShareNavigationMouse(shareKey);
+            var selectKey = host.SelectNavigationKey.Value.MainKey;
+            bool select = !share && UnhookedNavigationKey(selectKey) && Input.GetKeyDown(selectKey) && NavigationMouse(selectKey);
+            if (!share && !select) return;
             var canvas = map.m_largeRoot.GetComponentInParent<Canvas>()?.rootCanvas;
             Camera camera = canvas != null && canvas.renderMode != RenderMode.ScreenSpaceOverlay ? canvas.worldCamera : null;
             if (RectTransformUtility.RectangleContainsScreenPoint(map.m_mapImageLarge.rectTransform, ZInput.pointerPosition, camera))
-                MapClick(navigation: true);
+                MapClick(navigation: select, shareTarget: share);
         }
-        internal bool ShareNavigationMouse() => host.ShareMarkers.Value && NavigationAvailable() && (Input.GetKey(KeyCode.LeftAlt) || Input.GetKey(KeyCode.RightAlt));
         internal bool MapClick(bool toggle = true, bool navigation = false, bool clearSelected = false, bool shareTarget = false)
         {
             if (host.Window.Open) return false;
@@ -883,6 +891,7 @@ namespace MapTracker
         private static bool Prefix()
         {
             var tracking = Plugin.Instance?.Tracking;
+            if (tracking?.ShareNavigationMouse(KeyCode.Mouse0) == true) return tracking.MapClick(shareTarget: true);
             return tracking?.MapClick(navigation: tracking.NavigationMouse(KeyCode.Mouse0)) ?? true;
         }
     }
@@ -892,6 +901,7 @@ namespace MapTracker
         private static bool Prefix()
         {
             var tracking = Plugin.Instance?.Tracking;
+            if (tracking?.ShareNavigationMouse(KeyCode.Mouse0) == true) return false;
             return tracking?.MapClick(false, tracking.NavigationMouse(KeyCode.Mouse0)) ?? true;
         }
     }
@@ -901,6 +911,7 @@ namespace MapTracker
         private static bool Prefix()
         {
             var tracking = Plugin.Instance?.Tracking;
+            if (tracking?.ShareNavigationMouse(KeyCode.Mouse1) == true) return tracking.MapClick(shareTarget: true);
             bool navigation = tracking?.NavigationMouse(KeyCode.Mouse1) == true;
             return tracking?.MapClick(navigation, navigation, clearSelected: true) ?? true;
         }
@@ -911,7 +922,7 @@ namespace MapTracker
         private static bool Prefix()
         {
             var tracking = Plugin.Instance?.Tracking;
-            if (tracking?.ShareNavigationMouse() == true) return tracking.MapClick(shareTarget: true);
+            if (tracking?.ShareNavigationMouse(KeyCode.Mouse2) == true) return tracking.MapClick(shareTarget: true);
             return tracking?.NavigationMouse(KeyCode.Mouse2) != true || tracking.MapClick(navigation: true);
         }
     }

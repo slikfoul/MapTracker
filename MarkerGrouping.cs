@@ -43,20 +43,23 @@ namespace MapTracker
         private int previousCount = -1, previousMinimum, previousDistance;
         private Minimap.MapMode previousMode;
         private string selectedGroup;
+        private List<MarkerRecord> tooltipMembers;
+        private readonly GroupTooltipLayout.Placement tooltipPlacement = new GroupTooltipLayout.Placement();
         private readonly List<LabelBox> tooltipObstacles = new List<LabelBox>();
         private readonly Vector3[] tooltipCorners = new Vector3[4];
         internal void Invalidate() { nextBuild = 0; previousCount = -1; }
         internal void Toggle(MarkerRecord representative)
         {
             selectedGroup = selectedGroup == representative.id ? null : representative.id;
+            tooltipPlacement.Reset();
         }
-        internal void Close() { selectedGroup = null; if (tooltip != null) tooltip.SetActive(false); }
+        internal void Close() { selectedGroup = null; tooltipMembers = null; tooltipPlacement.Reset(); if (tooltip != null) tooltip.SetActive(false); }
         internal bool IsExpanded(MarkerRecord record) => selectedGroup == record.id;
         internal void Apply(IEnumerable<MarkerRecord> records, Minimap map, Plugin host, Func<MarkerRecord, string> name)
         {
             eligible.Clear(); visible.Clear();
-            if (tooltip != null) tooltip.SetActive(false);
-            if (map.m_mode != Minimap.MapMode.Large || host.Window.Open) selectedGroup = null;
+            tooltipMembers = null;
+            if (map.m_mode != Minimap.MapMode.Large || host.Window.Open) Close();
             foreach (var record in records)
             {
                 record.group = null; record.badge?.Hide();
@@ -68,7 +71,7 @@ namespace MapTracker
                 visible.Add(record);
             }
             if (!host.GroupMarkers.Value || eligible.Count < host.GroupThreshold.Value)
-            { previousCount = -1; UpdateNames(records, name); return; }
+            { previousCount = -1; Close(); UpdateNames(records, name); return; }
             float scale = map.m_largeRoot.GetComponentInParent<Canvas>()?.rootCanvas.scaleFactor ?? 1;
             var canvas = map.m_largeRoot.GetComponentInParent<Canvas>()?.rootCanvas;
             var camera = canvas != null && canvas.renderMode != RenderMode.ScreenSpaceOverlay ? canvas.worldCamera : null;
@@ -121,15 +124,24 @@ namespace MapTracker
                     member.pin.m_uiElement.gameObject.SetActive(false);
                     if (member.pin.m_NamePinData?.PinNameGameObject != null) member.pin.m_NamePinData.PinNameGameObject.SetActive(false);
                 }
-                Vector2 screen = RectTransformUtility.WorldToScreenPoint(camera, representative.pin.m_uiElement.position);
                 if (selectedGroup == representative.id && !host.Window.Open && map.m_mode == Minimap.MapMode.Large)
                 {
                     selectionVisible = true;
-                    ShowTooltip(map, members, screen, name);
+                    tooltipMembers = members;
                 }
             }
-            if (!selectionVisible) selectedGroup = null;
+            if (!selectionVisible) Close();
             UpdateNames(records, name);
+        }
+        internal void DrawTooltip(Minimap map, Func<MarkerRecord, string> name)
+        {
+            if (tooltipMembers == null || tooltipMembers.Count == 0 || map.m_mode != Minimap.MapMode.Large)
+            { if (tooltip != null) tooltip.SetActive(false); return; }
+            var canvas = map.m_largeRoot.GetComponentInParent<Canvas>()?.rootCanvas;
+            Camera camera = canvas != null && canvas.renderMode != RenderMode.ScreenSpaceOverlay ? canvas.worldCamera : null;
+            var representative = tooltipMembers[0].pin?.m_uiElement;
+            if (representative == null) { Close(); return; }
+            ShowTooltip(map, tooltipMembers, RectTransformUtility.WorldToScreenPoint(camera, representative.position), name);
         }
         private static void UpdateNames(IEnumerable<MarkerRecord> records, Func<MarkerRecord, string> name)
         {
@@ -168,13 +180,13 @@ namespace MapTracker
                 tooltipText.rectTransform.anchorMin = Vector2.zero; tooltipText.rectTransform.anchorMax = Vector2.one;
             tooltipText.rectTransform.offsetMin = new Vector2(18, 16); tooltipText.rectTransform.offsetMax = new Vector2(-18, -16);
             }
-            tooltip.SetActive(true); tooltip.transform.SetAsLastSibling();
+            tooltip.transform.SetAsLastSibling();
             var lines = members.Select(name).Distinct().Take(12).ToList();
             string text = Plugin.Text("Объектов: ", "Objects: ") + members.Count + "\n" + string.Join("\n", lines.ToArray());
             if (members.Count > 12) text += "\n…";
-            tooltipText.text = text;
+            if (tooltipText.text != text) tooltipText.text = text;
             RectTransform rect = (RectTransform)tooltip.transform;
-            rect.sizeDelta = new Vector2(320, 24 * (lines.Count + 1) + 36);
+            float height = 24 * (lines.Count + 1) + 36;
             rect.anchorMin = rect.anchorMax = rect.pivot = new Vector2(0.5f, 0.5f);
             RectTransform parentRect = parent as RectTransform;
             var canvas = parent.GetComponentInParent<Canvas>()?.rootCanvas;
@@ -185,19 +197,33 @@ namespace MapTracker
                 foreach (var member in members)
                 {
                     ProtectTooltip(member.pin?.m_uiElement, parentRect);
-                    ProtectTooltip(member.pin?.m_NamePinData?.PinNameRectTransform, parentRect);
+                    if (member.largeNameShown && member.pin?.m_NamePinData?.PinNameText != null)
+                    {
+                        var label = member.pin.m_NamePinData.PinNameText;
+                        ProtectTooltip(label.rectTransform, parentRect, label.GetPreferredValues(label.text));
+                    }
                 }
                 var area = new LabelBox(parentRect.rect.xMin + 12, parentRect.rect.yMin + 12, parentRect.rect.width - 24, parentRect.rect.height - 24);
-                if (!GroupTooltipLayout.TryPlace(tooltipObstacles, area, rect.sizeDelta.x, rect.sizeDelta.y, local.x, local.y, 20, out var placed))
+                if (!tooltipPlacement.TryPlace(tooltipObstacles, area, 320, height, local.x, local.y, 20, out var placed))
                 { tooltip.SetActive(false); return; }
                 rect.sizeDelta = new Vector2(placed.Width, placed.Height);
                 rect.anchoredPosition = new Vector2(placed.X + placed.Width * 0.5f, placed.Y + placed.Height * 0.5f) - parentRect.rect.center;
+                tooltip.SetActive(true);
             }
+            else tooltip.SetActive(false);
         }
-        private void ProtectTooltip(RectTransform element, RectTransform parent)
+        private void ProtectTooltip(RectTransform element, RectTransform parent, Vector2? textSize = null)
         {
             if (element == null || !element.gameObject.activeInHierarchy || (element.GetComponent<CanvasGroup>()?.alpha ?? 1) < 0.01f) return;
-            element.GetWorldCorners(tooltipCorners);
+            if (textSize.HasValue)
+            {
+                var center = element.rect.center; var half = textSize.Value * 0.5f;
+                tooltipCorners[0] = element.TransformPoint(new Vector3(center.x - half.x, center.y - half.y));
+                tooltipCorners[1] = element.TransformPoint(new Vector3(center.x - half.x, center.y + half.y));
+                tooltipCorners[2] = element.TransformPoint(new Vector3(center.x + half.x, center.y + half.y));
+                tooltipCorners[3] = element.TransformPoint(new Vector3(center.x + half.x, center.y - half.y));
+            }
+            else element.GetWorldCorners(tooltipCorners);
             float minX = float.MaxValue, minY = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue;
             foreach (var corner in tooltipCorners)
             {
@@ -212,7 +238,7 @@ namespace MapTracker
             if (tooltipFrame != null) UnityEngine.Object.Destroy(tooltipFrame);
             tooltipFrame = null;
             tooltip = null; tooltipText = null; cachedGroups.Clear(); previousCount = -1; nextBuild = 0;
-            selectedGroup = null;
+            Close();
         }
     }
 }

@@ -10,7 +10,7 @@ namespace MapTracker
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "Slikfoul.MapTracker";
-        public const string Version = "0.11.0";
+        public const string Version = "0.12.0";
         internal static Plugin Instance;
         internal ConfigEntry<bool> Enabled, SmallMap, LargeMap, OtherPlayerPins;
         internal ConfigEntry<bool> Hostile, Friendly, Animals, Tamed;
@@ -32,6 +32,7 @@ namespace MapTracker
         internal ConfigEntry<string> NotifyTypes;
         internal ConfigEntry<KeyboardShortcut> CancelNavigationKey;
         internal ConfigEntry<KeyboardShortcut> SelectNavigationKey;
+        internal ConfigEntry<KeyboardShortcut> ShareNavigationKey;
         internal ConfigEntry<bool> ShowNavigationArrow;
         internal MapCategoryVisibility MapCategories;
         internal PresetCycler Presets;
@@ -85,7 +86,8 @@ namespace MapTracker
             NameMargin = Config.Bind("Names", "Name distance hysteresis meters", 5, new ConfigDescription("Names appear inside their distance limit and disappear this many meters beyond it, reducing flicker.", new AcceptableValueRange<int>(0, 30)));
             NotifyDungeons = Config.Bind("Notifications", "New dungeons", false, "Notify once when a new local dungeon entrance is actually detected. Previously saved entrances do not notify.");
             NotifyTypes = Config.Bind("Notifications", "Object type keys", "", "Comma-separated catalog keys for discovery notifications. Use the Notify checkbox in the map filter window to add or remove a type.");
-            SelectNavigationKey = Config.Bind("Navigation", "Select navigation key", new KeyboardShortcut(KeyCode.Mouse0, KeyCode.LeftAlt), "Select an object, public player or temporary destination under the pointer on the large map. Default: Alt + left-click (either Alt key). Press again on the selected target to cancel, or right-click it. Mouse bindings replace that button's normal map action; keyboard bindings work while pointing at the map. Alt + middle-click is reserved for sending a navigation target when Share discoveries is enabled. Disabled while typing or using menus.");
+            SelectNavigationKey = Config.Bind("Navigation", "Select navigation key", new KeyboardShortcut(KeyCode.Mouse0, KeyCode.LeftAlt), "Select an object, public player or temporary destination under the pointer on the large map. Default: Alt + left-click (either Alt key). Press again on the selected target to cancel, or right-click it. Mouse bindings replace that button's normal map action; keyboard bindings work while pointing at the map. Share navigation key has priority if both bindings match. Disabled while typing or using menus.");
+            ShareNavigationKey = Config.Bind("Navigation", "Share navigation key", new KeyboardShortcut(KeyCode.Mouse2, KeyCode.LeftAlt), "Share the object, public player or map location under the pointer as a separate blue navigation destination. Default: Alt + middle-click (either Alt key). Requires Share discoveries; automatic creature transmission is independent. Change the mouse button, keyboard key or modifiers, or clear the binding to disable it. Mouse bindings replace that button's normal map action; keyboard bindings work while pointing at the large map. Takes priority if Select navigation key also matches. Disabled while typing or using menus.");
             CancelNavigationKey = Config.Bind("Navigation", "Cancel navigation key", new KeyboardShortcut(KeyCode.F10), "Cancel both personal and shared navigation destinations. Right-click a map target to cancel only that target. Automatic arrival stops navigation within 5 meters. Disabled while typing or using menus.");
             ShowNavigationArrow = Config.Bind("Navigation", "Show navigation arrow", true, "Show direction arrows, destination names and distances at the top of the gameplay screen. Personal navigation is gold; shared navigation is blue, side by side when both exist. The arrow turns relative to the camera: up is ahead and down is behind. Hides while the large map or menus are open; turning this off keeps the map destination and navigation active.");
             MapCategories = new MapCategoryVisibility(Config);

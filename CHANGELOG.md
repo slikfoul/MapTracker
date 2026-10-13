@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.12.0
+
+- Independent configurable mouse or keyboard bindings for sharing navigation targets, default Alt + middle-click.
+
 ## 0.11.0
 
 - Shared static discoveries merge into each recipient's discovery set, with per-type visibility and retention controls and distant ally observations.

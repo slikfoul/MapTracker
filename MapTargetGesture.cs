@@ -5,8 +5,15 @@ using UnityEngine;
 namespace MapTracker
 {
     internal enum MapTargetAction { None, Select, Place, Clear, Expand, Consume }
+    internal enum NavigationBindingAction { None, Select, Share }
     internal static class MapTargetGesture
     {
+        internal static NavigationBindingAction BindingAction(KeyboardShortcut select, KeyboardShortcut share,
+            KeyCode button, Func<KeyCode, bool> pressed, bool sharing)
+        {
+            if (sharing && Matches(share, button, pressed)) return NavigationBindingAction.Share;
+            return Matches(select, button, pressed) ? NavigationBindingAction.Select : NavigationBindingAction.None;
+        }
         internal static bool Matches(KeyboardShortcut shortcut, KeyCode button, Func<KeyCode, bool> pressed)
         {
             if (shortcut.MainKey == KeyCode.None || shortcut.MainKey != button) return false;
