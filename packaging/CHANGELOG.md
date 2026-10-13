@@ -1,22 +1,18 @@
 # Changelog
 
-## 0.12.0
+## 1.0.0
 
-- Creature and world-object tracking on Valheim's native minimap and large map.
-- Searchable categories with per-type display and discovery retention controls.
-- Remembered portal tags, dungeon entrance icons, visited states and manual completion marks.
-- Independent creature icons, colored dots, sizes, names and category visibility for each map.
-- Configurable discovery distance and camera-, obstacle- and mist-aware line-of-sight detection.
-- Optional grouping with screen/world size limits, exact member locations on click and member lists placed clear of the expanded group.
-- Built-in and custom presets limited to per-type map-filter display, discovery memory and notification choices.
-- Configurable object/map-point selection (Alt + left-click by default), automatic arrival and right-click or configurable-key cancellation.
-- Optional camera-relative navigation arrows with destination icons, names and distances on the gameplay HUD and map summaries.
-- Creature names anchored to their markers, minimap name distance and zoom-based large-map names with hover names for crowded markers.
-- Adjustable silhouette outline thickness and automatic overlap-based grouping with a single world span limit and centered counts.
-- Separate font sizes for creatures and other objects, and Alt + left-click navigation to players with public map positions.
-- Radius-based grouping of creature names into centered same-species captions, enabled by default with a 15-meter radius.
-- Separate Minimap and Large map settings, solid black silhouette outlines and an 800-meter maximum group span, default 400.
-- Optional notifications for new dungeon entrances and selected static object types.
-- Optional marker sharing and independently configurable shared navigation for objects and arbitrary map locations, default Alt + middle-click, preserving personal navigation.
-- Three-state target highlighting on both maps and stacked navigation summaries in the lower-left large-map corner.
-- Shared static discoveries in a unified marker set, distant ally observations and independent optional creature-position transmission, disabled by default.
+- Track creatures, portals, dungeons, resources, plants, dropped items and other world objects on the minimap and large map.
+- Searchable categories with per-type display, discovery retention and notification controls.
+- Remember portal tags and dungeon entrances, with white unvisited markers, light-blue visited markers and left-click completion marks.
+- Independently customize each map's creature icons or colored dots, icon sizes, names, fonts, outlines, stars and category visibility.
+- Zoom-aware marker grouping with centered counts and exact member locations on expansion.
+- Optional centered same-species name groups, enabled by default with a 15-meter radius.
+- Configurable discovery radius, including camera-, obstacle- and mist-aware line-of-sight detection.
+- Save, load and delete built-in or custom filter presets.
+- Personal navigation to objects, public players and arbitrary map points, with HUD arrows, icons, names, distances and automatic arrival.
+- Configurable selection, sharing and cancellation keys, with right-click target cancellation.
+- Optional shared discoveries with deduplication, recipient filters, retained static locations and separate live-creature transmission, disabled by default.
+- Shared navigation alongside personal navigation, with gold, blue and combined target highlights.
+- Prominent queued discovery notifications with object icons, a gold heading and contrasting names.
+- Separate visibility controls for collected plants, depleted ore and completed dungeons.

@@ -18,6 +18,27 @@ Check(GroupTooltipLayout.TryPlace(withLabels, tooltipArea, 320, 348, 700, 350, 2
 Check(!GroupTooltipLayout.TryPlace(new[] { tooltipArea }, tooltipArea, 320, 348, 600, 400, 20, out _),
     "when the entire viewport is occupied no popup is placed over protected objects");
 var retainedTooltip = new GroupTooltipLayout.Placement();
+var fractionalCloud = Enumerable.Range(0, 16).Select(i => new LabelBox(650.1f + i % 4 * 4, 300.3f + i / 4 * 4, 24, 24)).ToArray();
+var fractionalPlacement = new GroupTooltipLayout.Placement();
+Check(fractionalPlacement.TryPlace(fractionalCloud, tooltipArea, 320, 348, 700.13f, 350.17f, 20, out var fractionalFirst) &&
+    fractionalPlacement.TryPlace(fractionalCloud, tooltipArea, 320, 348, 700.13f, 350.17f, 20, out var fractionalNext) &&
+    Math.Abs(fractionalFirst.X - fractionalNext.X) < 0.01f && Math.Abs(fractionalFirst.Y - fractionalNext.Y) < 0.01f,
+    "sixteen portal markers with fractional canvas coordinates keep the popup stationary across repeated frames");
+var lockedPopup = new GroupTooltipLayout.Placement();
+lockedPopup.TryPlace(fractionalCloud, tooltipArea, 320, 348, 700.13f, 350.17f, 20, out var lockedFirst, lockPosition: true);
+var hoverOverlay = new LabelBox(lockedFirst.X + 10, lockedFirst.Y + 10, 100, 20);
+bool ignoredTransientNames = true;
+for (int frame = 0; frame < 120; frame++)
+{
+    var transientBoxes = frame % 2 == 0 ? fractionalCloud : fractionalCloud.Concat(new[] { hoverOverlay }).ToArray();
+    ignoredTransientNames &= lockedPopup.TryPlace(transientBoxes, tooltipArea, 320, 348, 700.13f, 350.17f, 20, out var fixedPose, lockPosition: true) &&
+        Math.Abs(fixedPose.X - lockedFirst.X) < 0.01f && Math.Abs(fixedPose.Y - lockedFirst.Y) < 0.01f;
+}
+Check(ignoredTransientNames, "an open sixteen-portal list cannot jump when native or hover label geometry alternates between frames");
+lockedPopup.Reset();
+var changedMembers = fractionalCloud.Concat(new[] { hoverOverlay }).ToArray();
+Check(lockedPopup.TryPlace(changedMembers, tooltipArea, 320, 348, 700.13f, 350.17f, 20, out var recomputedLocked, lockPosition: true) &&
+    NoCover(recomputedLocked, changedMembers), "real changes to the protected group reset fixed placement and avoid new member bounds");
 Check(retainedTooltip.TryPlace(edgeCloud, tooltipArea, 320, 348, 80, 350, 20, out var retainedInitial),
     "a selected edge group gets an initial stable popup position");
 bool remainedFixed = true;

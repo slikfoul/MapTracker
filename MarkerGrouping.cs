@@ -45,6 +45,7 @@ namespace MapTracker
         private string selectedGroup;
         private List<MarkerRecord> tooltipMembers;
         private readonly GroupTooltipLayout.Placement tooltipPlacement = new GroupTooltipLayout.Placement();
+        private int? tooltipGeometry;
         private readonly List<LabelBox> tooltipObstacles = new List<LabelBox>();
         private readonly Vector3[] tooltipCorners = new Vector3[4];
         internal void Invalidate() { nextBuild = 0; previousCount = -1; }
@@ -52,9 +53,11 @@ namespace MapTracker
         {
             selectedGroup = selectedGroup == representative.id ? null : representative.id;
             tooltipPlacement.Reset();
+            tooltipGeometry = null;
         }
-        internal void Close() { selectedGroup = null; tooltipMembers = null; tooltipPlacement.Reset(); if (tooltip != null) tooltip.SetActive(false); }
+        internal void Close() { selectedGroup = null; tooltipMembers = null; tooltipGeometry = null; tooltipPlacement.Reset(); if (tooltip != null) tooltip.SetActive(false); }
         internal bool IsExpanded(MarkerRecord record) => selectedGroup == record.id;
+        internal bool ShowsDetails(MarkerRecord record) => tooltip != null && tooltip.activeInHierarchy && tooltipMembers != null && tooltipMembers.Contains(record);
         internal void Apply(IEnumerable<MarkerRecord> records, Minimap map, Plugin host, Func<MarkerRecord, string> name)
         {
             eligible.Clear(); visible.Clear();
@@ -133,7 +136,7 @@ namespace MapTracker
             if (!selectionVisible) Close();
             UpdateNames(records, name);
         }
-        internal void DrawTooltip(Minimap map, Func<MarkerRecord, string> name)
+        internal void DrawTooltip(Minimap map, Plugin host, Func<MarkerRecord, string> name)
         {
             if (tooltipMembers == null || tooltipMembers.Count == 0 || map.m_mode != Minimap.MapMode.Large)
             { if (tooltip != null) tooltip.SetActive(false); return; }
@@ -141,7 +144,7 @@ namespace MapTracker
             Camera camera = canvas != null && canvas.renderMode != RenderMode.ScreenSpaceOverlay ? canvas.worldCamera : null;
             var representative = tooltipMembers[0].pin?.m_uiElement;
             if (representative == null) { Close(); return; }
-            ShowTooltip(map, tooltipMembers, RectTransformUtility.WorldToScreenPoint(camera, representative.position), name);
+            ShowTooltip(map, host, tooltipMembers, RectTransformUtility.WorldToScreenPoint(camera, representative.position), name);
         }
         private static void UpdateNames(IEnumerable<MarkerRecord> records, Func<MarkerRecord, string> name)
         {
@@ -153,7 +156,7 @@ namespace MapTracker
                 if (text.text != label) text.text = label;
             }
         }
-        private void ShowTooltip(Minimap map, List<MarkerRecord> members, Vector2 screen, Func<MarkerRecord, string> name)
+        private void ShowTooltip(Minimap map, Plugin host, List<MarkerRecord> members, Vector2 screen, Func<MarkerRecord, string> name)
         {
             Transform parent = map.m_largeRoot.transform;
             if (tooltip == null)
@@ -193,18 +196,25 @@ namespace MapTracker
             Camera camera = canvas != null && canvas.renderMode != RenderMode.ScreenSpaceOverlay ? canvas.worldCamera : null;
             if (parentRect != null && RectTransformUtility.ScreenPointToLocalPointInRectangle(parentRect, screen, camera, out var local))
             {
+                // Only stable map/object state invalidates a placement. Native label
+                // visibility and hover widgets must never drive this signature.
+                int geometry = map.LargeZoom.GetHashCode() ^ parentRect.rect.GetHashCode() ^ host.CreatureNameSize.Value ^ (host.ObjectNameSize.Value << 8);
+                foreach (var member in members)
+                    geometry = unchecked(geometry + (member.id.GetHashCode() * 397 ^ member.position.GetHashCode() ^ name(member).GetHashCode()));
+                if (tooltipGeometry != geometry) { tooltipPlacement.Reset(); tooltipGeometry = geometry; }
                 tooltipObstacles.Clear();
                 foreach (var member in members)
                 {
                     ProtectTooltip(member.pin?.m_uiElement, parentRect);
-                    if (member.largeNameShown && member.pin?.m_NamePinData?.PinNameText != null)
+                    if (member.pin?.m_NamePinData?.PinNameText != null)
                     {
                         var label = member.pin.m_NamePinData.PinNameText;
-                        ProtectTooltip(label.rectTransform, parentRect, label.GetPreferredValues(label.text));
+                        string caption = name(member) + (member.group != null ? " ×" + member.group.Count : "");
+                        ProtectTooltip(label.rectTransform, parentRect, label.GetPreferredValues(caption), true);
                     }
                 }
                 var area = new LabelBox(parentRect.rect.xMin + 12, parentRect.rect.yMin + 12, parentRect.rect.width - 24, parentRect.rect.height - 24);
-                if (!tooltipPlacement.TryPlace(tooltipObstacles, area, 320, height, local.x, local.y, 20, out var placed))
+                if (!tooltipPlacement.TryPlace(tooltipObstacles, area, 320, height, local.x, local.y, 20, out var placed, lockPosition: true))
                 { tooltip.SetActive(false); return; }
                 rect.sizeDelta = new Vector2(placed.Width, placed.Height);
                 rect.anchoredPosition = new Vector2(placed.X + placed.Width * 0.5f, placed.Y + placed.Height * 0.5f) - parentRect.rect.center;
@@ -212,9 +222,9 @@ namespace MapTracker
             }
             else tooltip.SetActive(false);
         }
-        private void ProtectTooltip(RectTransform element, RectTransform parent, Vector2? textSize = null)
+        private void ProtectTooltip(RectTransform element, RectTransform parent, Vector2? textSize = null, bool reserveHidden = false)
         {
-            if (element == null || !element.gameObject.activeInHierarchy || (element.GetComponent<CanvasGroup>()?.alpha ?? 1) < 0.01f) return;
+            if (element == null || (!reserveHidden && (!element.gameObject.activeInHierarchy || (element.GetComponent<CanvasGroup>()?.alpha ?? 1) < 0.01f))) return;
             if (textSize.HasValue)
             {
                 var center = element.rect.center; var half = textSize.Value * 0.5f;

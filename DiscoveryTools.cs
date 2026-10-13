@@ -51,8 +51,8 @@ namespace MapTracker
         private static readonly System.Reflection.MethodInfo ScreenToWorld = HarmonyLib.AccessTools.Method(typeof(Minimap), "ScreenToWorldPoint", new[] { typeof(Vector3) });
         private string previousTypes;
         private readonly HashSet<string> notifyTypes = new HashSet<string>(StringComparer.Ordinal);
-        private readonly Queue<string> notifications = new Queue<string>();
-        private float nextNotification;
+        private readonly DiscoveryNotificationFeed notifications = new DiscoveryNotificationFeed();
+        private readonly DiscoveryNotificationHud notificationHud = new DiscoveryNotificationHud();
         internal DiscoveryTools(Tracking owner, Plugin plugin) { tracking = owner; host = plugin; }
         internal List<MarkerRecord> Search(string term, bool favorites) => DiscoveryQuery.Search(tracking.Records, term, favorites,
             Player.m_localPlayer != null ? Player.m_localPlayer.transform.position : Vector3.zero, tracking.Name);
@@ -161,8 +161,8 @@ namespace MapTracker
         internal void Detected(MarkerRecord record)
         {
             ReadNotificationTypes();
-            if (DiscoveryNotification.Allowed(record, host.NotifyDungeons.Value, notifyTypes.Contains(record.type)))
-                if (notifications.Count < 64) notifications.Enqueue("Discovered: " + tracking.Name(record));
+            if (host.Enabled.Value && DiscoveryNotification.Allowed(record, host.NotifyDungeons.Value, notifyTypes.Contains(record.type)))
+                notifications.Enqueue(new MarkerRecord { id = record.id, type = record.type, entry = record.entry, nameCache = tracking.Name(record) });
         }
         internal void Tick()
         {
@@ -188,8 +188,9 @@ namespace MapTracker
                 player.transform.position, target.position, player.InInterior(), player.IsTeleporting(), pointTarget)))) ClearTarget();
             if (sharedTarget != null && (!host.ShareMarkers.Value || (player != null && NavigationArrival.Reached(
                 player.transform.position, sharedTarget.position, player.InInterior(), player.IsTeleporting(), sharedTarget.entry.category == "Navigation")))) ClearSharedTarget();
-            if (Player.m_localPlayer != null && notifications.Count > 0 && Time.realtimeSinceStartup >= nextNotification)
-            { Player.m_localPlayer.Message(MessageHud.MessageType.TopLeft, notifications.Dequeue()); nextNotification = Time.realtimeSinceStartup + 4; }
+            bool showNotice = DiscoveryNotificationHud.CanShow(Minimap.instance, host.Enabled.Value && !host.Window.Open);
+            notifications.Tick(Time.realtimeSinceStartup, showNotice);
+            notificationHud.Apply(Minimap.instance, notifications.Current, showNotice);
         }
         internal void DrawNavigation(Minimap map)
         {
@@ -222,6 +223,6 @@ namespace MapTracker
             HarmonyLib.AccessTools.Method(typeof(Minimap), "CenterMap").Invoke(map, new object[] { record.position });
             tracking.RequestPinRefresh();
         }
-        internal void Reset() { RemoveWaypoint(); RemoveSharedWaypoint(); targets.ClearShared(); sharedObject = null; sharedObjectId = sharedObjectType = null; target = null; pointTarget = playerTarget = false; playerTargetId = default; publicPlayers.Clear(); notifications.Clear(); navigation.Dispose(); navigationHud.Dispose(); sharedNavigation.Dispose(); sharedNavigationHud.Dispose(); }
+        internal void Reset() { RemoveWaypoint(); RemoveSharedWaypoint(); targets.ClearShared(); sharedObject = null; sharedObjectId = sharedObjectType = null; target = null; pointTarget = playerTarget = false; playerTargetId = default; publicPlayers.Clear(); notifications.Clear(); notificationHud.Dispose(); navigation.Dispose(); navigationHud.Dispose(); sharedNavigation.Dispose(); sharedNavigationHud.Dispose(); }
     }
 }

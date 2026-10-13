@@ -1,8 +1,8 @@
 {
   "name": "MapTracker",
-  "version_number": "0.12.0",
+  "version_number": "1.0.0",
   "website_url": "https://github.com/slikfoul/MapTracker",
-  "description": "Track creatures, portals, dungeons and resources on Valheim's maps. Customize filters, save presets, mark favorites and navigate to discovered locations.",
+  "description": "Track creatures, portals, dungeons and resources on both maps. Customize markers, save filters, navigate to targets and share discoveries with friends.",
   "dependencies": [
     "denikson-BepInExPack_Valheim-5.4.2351"
   ]

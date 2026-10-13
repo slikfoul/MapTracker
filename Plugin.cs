@@ -10,7 +10,7 @@ namespace MapTracker
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "Slikfoul.MapTracker";
-        public const string Version = "0.12.0";
+        public const string Version = "1.0.0";
         internal static Plugin Instance;
         internal ConfigEntry<bool> Enabled, SmallMap, LargeMap, OtherPlayerPins;
         internal ConfigEntry<bool> Hostile, Friendly, Animals, Tamed;

@@ -558,7 +558,7 @@ namespace MapTracker
             creatureNameGroups.Apply(records.Values, map, host);
             largeLabels.Apply(records.Values, map, host);
             EnforceNameVisibility();
-            grouping.DrawTooltip(map, Name);
+            grouping.DrawTooltip(map, host, Name);
             ApplySharedPinVisibility(map);
         }
         private void ApplySharedPinVisibility(Minimap currentMap)
@@ -573,6 +573,7 @@ namespace MapTracker
                 }
         }
         internal void PrepareSharedPins() { ReleaseSharedMasks(false); }
+        internal bool HasGroupDetails(MarkerRecord record) => grouping.ShowsDetails(record);
         internal void KeepSharedPinsHidden()
         {
             ReleaseSharedMasks(false);

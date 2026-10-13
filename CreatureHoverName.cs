@@ -21,6 +21,7 @@ namespace MapTracker
             foreach (var record in records)
             {
                 if (record.entry == null || record.pin?.m_uiElement == null || !record.pin.m_uiElement.gameObject.activeInHierarchy) continue;
+                if (host.Tracking.HasGroupDetails(record)) continue;
                 float distance = Vector2.Distance(pointer, RectTransformUtility.WorldToScreenPoint(camera, record.pin.m_uiElement.position));
                 float reach = Mathf.Max(16, Mathf.Max(record.pin.m_uiElement.rect.width, record.pin.m_uiElement.rect.height) * 0.5f) *
                     (canvas != null ? canvas.scaleFactor : 1);
@@ -47,7 +48,7 @@ namespace MapTracker
             Vector2 screen = RectTransformUtility.WorldToScreenPoint(camera, closest.pin.m_uiElement.position);
             screen.y += (closest.pin.m_uiElement.rect.height * 0.5f + 5) * (canvas != null ? canvas.scaleFactor : 1);
             if (RectTransformUtility.ScreenPointToLocalPointInRectangle(parent, screen, camera, out var local))
-                text.rectTransform.anchoredPosition = local;
+                text.rectTransform.anchoredPosition = local - parent.rect.center;
             text.gameObject.SetActive(true);
         }
         public void Dispose() { if (text != null) Object.Destroy(text.gameObject); text = null; }
