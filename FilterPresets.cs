@@ -16,6 +16,7 @@ namespace MapTracker
         public Dictionary<string, FilterPresetType> types = new Dictionary<string, FilterPresetType>();
         public bool hostile = true, friendly, animals, tamed;
         public bool? groupPlants;
+        public Dictionary<string, Dictionary<string, string>> display;
     }
     public sealed class FilterPresetDocument
     {
@@ -28,6 +29,7 @@ namespace MapTracker
     {
         private readonly string path;
         public FilterPresetStore(string file) { path = file; }
+        public FilterPresetDocument ReadSnapshot() => ReadDocument();
         public List<FilterPreset> Read()
         {
             return ReadDocument().presets.OrderBy(p => p.name, StringComparer.OrdinalIgnoreCase).ToList();
@@ -91,6 +93,7 @@ namespace MapTracker
                 name = name, hostile = host.Hostile.Value, friendly = host.Friendly.Value,
                 animals = host.Animals.Value, tamed = host.Tamed.Value,
                 groupPlants = host.GroupPlants.Value,
+                display = PresetDisplay.Capture(host.Config),
                 types = host.Catalog.Entries.ToDictionary(e => e.key, e => new FilterPresetType
                 { selected = e.Selected.Value, keep = e.KeepVisible != null && e.KeepVisible.Value })
             };
@@ -100,6 +103,7 @@ namespace MapTracker
             bool autosave = host.Config.SaveOnConfigSet; host.Config.SaveOnConfigSet = false;
             try
             {
+                PresetDisplay.Apply(host.Config, preset.display);
                 foreach (var entry in host.Catalog.Entries)
                 {
                     preset.types.TryGetValue(entry.key, out var saved);

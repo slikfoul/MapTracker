@@ -22,6 +22,7 @@ namespace MapTracker
         private readonly FilterPresetStore presetStore = new FilterPresetStore(Path.Combine(Paths.ConfigPath, "MapTracker", "presets.json"));
         private void OpenPresets()
         {
+            CloseDiscoveries();
             if (presetRoot == null) BuildPresets();
             presetRoot.SetActive(true); presetRoot.transform.SetAsLastSibling();
             PresetAction(() => { RefreshPresets(); presetStatus.text = ""; });
@@ -76,6 +77,7 @@ namespace MapTracker
                     FilterPresets.Apply(window.Host, saved);
                 }
                 Refresh(); window.Host.Tracking.RequestPinRefresh();
+                window.Host.Presets.Loaded(builtInPreset.HasValue ? "Built-in: " + builtInPreset.Value : selectedPreset);
                 presetStatus.text = Plugin.Text("Пресет загружен.", "Preset loaded.");
             }));
             Region((RectTransform)presetLoad.transform, Vector2.zero, new Vector2(0.333f, 0), new Vector2(24, 46), new Vector2(-4, 78));
@@ -103,16 +105,18 @@ namespace MapTracker
         private void RefreshPresets()
         {
             // Read first: invalid storage must not remove the existing list or be overwritten.
-            var saved = presetStore.Read();
+            var snapshot = presetStore.ReadSnapshot();
+            var saved = snapshot.presets;
+            saved.Sort((a, b) => StringComparer.OrdinalIgnoreCase.Compare(a.name, b.name));
             foreach (var button in presetButtons) UnityEngine.Object.Destroy(button.gameObject);
             presetButtons.Clear(); presetActive.Clear();
-            if (!presetStore.BuiltInDeleted(BuiltInFilterPreset.Default))
+            if (!snapshot.deletedBuiltIns.Contains(BuiltInFilterPreset.Default.ToString()))
                 AddPresetButton(Plugin.Text("Дефолт (встроенный)", "Default (built-in)"), null, BuiltInFilterPreset.Default);
-            if (!presetStore.BuiltInDeleted(BuiltInFilterPreset.Gathering))
+            if (!snapshot.deletedBuiltIns.Contains(BuiltInFilterPreset.Gathering.ToString()))
                 AddPresetButton(Plugin.Text("Собирательство (встроенный)", "Gathering (built-in)"), null, BuiltInFilterPreset.Gathering);
-            if (!presetStore.BuiltInDeleted(BuiltInFilterPreset.Exploration))
+            if (!snapshot.deletedBuiltIns.Contains(BuiltInFilterPreset.Exploration.ToString()))
                 AddPresetButton(Plugin.Text("Разведка (встроенный)", "Exploration (built-in)"), null, BuiltInFilterPreset.Exploration);
-            if (!presetStore.BuiltInDeleted(BuiltInFilterPreset.Household))
+            if (!snapshot.deletedBuiltIns.Contains(BuiltInFilterPreset.Household.ToString()))
                 AddPresetButton(Plugin.Text("Хозяйство (встроенный)", "Household (built-in)"), null, BuiltInFilterPreset.Household);
             foreach (var preset in saved) AddPresetButton(preset.name, preset.name, null);
             presetContent.sizeDelta = new Vector2(0, presetButtons.Count * 42);

@@ -36,13 +36,14 @@ namespace MapTracker
         private const float RowHeight = 38;
         private static readonly Color Orange = new Color(1f, 0.631f, 0.235f);
         private static readonly Color Beige = new Color(0.853f, 0.725f, 0.533f);
-        private sealed class Row { internal RectTransform Root; internal Toggle Toggle, Keep; internal Text Text; internal Image Icon; internal DungeonGraphic Dungeon; internal FilterChoice Entry; }
+        private sealed class Row { internal RectTransform Root; internal Toggle Toggle, Keep, Notify; internal Text Text; internal Image Icon; internal DungeonGraphic Dungeon; internal FilterChoice Entry; }
         internal NativeFilterPanel(FilterWindow filter) { window = filter; }
 
         internal void SetVisible(bool visible)
         {
             if (root != null) root.SetActive(visible);
             if (!visible) ClosePresets();
+            if (!visible) CloseDiscoveries();
             if (visible) needsRefresh = true;
         }
         internal void Refresh() { needsRefresh = true; first = -1; }
@@ -58,6 +59,7 @@ namespace MapTracker
         {
             if (root == null && !Build()) return;
             TickPresets();
+            TickDiscoveries();
             root.SetActive(true);
             if (root.transform.GetSiblingIndex() != root.transform.parent.childCount - 1) root.transform.SetAsLastSibling();
             var canvas = root.transform.parent as RectTransform;
@@ -128,6 +130,10 @@ namespace MapTracker
             wood.material = panelMaterial; wood.color = Color.white; wood.raycastTarget = false;
             Text title = Label("MapTracker", panel, 34, Orange, TextAnchor.MiddleCenter, true);
             StretchTop(title.rectTransform, 70, 12, 70, 44);
+            var discoveriesButton = Button(panel, "Discoveries", OpenDiscoveries);
+            Pin((RectTransform)discoveriesButton.transform, new Vector2(0, 1), new Vector2(26, -20), new Vector2(150, 32));
+            var nextPresetButton = Button(panel, "Next preset", () => window.Host.Presets.Cycle());
+            Pin((RectTransform)nextPresetButton.transform, Vector2.one, new Vector2(-70, -20), new Vector2(150, 32));
             var drag = title.gameObject.AddComponent<FilterPanelDrag>(); drag.Target = panel;
             title.raycastTarget = true;
             summary = Label("", panel, 16, Beige, TextAnchor.MiddleCenter);
@@ -156,7 +162,9 @@ namespace MapTracker
             var objectHeader = Label(Plugin.Text("Показывать объект", "Show object"), headers, 14, Beige, TextAnchor.MiddleLeft);
             Stretch(objectHeader.rectTransform, 8, 0, 120, 0);
             var keepHeader = Label(Plugin.Text("После ухода", "Keep discovered"), headers, 13, Beige, TextAnchor.MiddleCenter);
-            Pin(keepHeader.rectTransform, new Vector2(1, 0.5f), new Vector2(-6, 0), new Vector2(112, 30));
+            Pin(keepHeader.rectTransform, new Vector2(1, 0.5f), new Vector2(-86, 0), new Vector2(112, 30));
+            var notifyHeader = Label("Notify", headers, 13, Beige, TextAnchor.MiddleCenter);
+            Pin(notifyHeader.rectTransform, new Vector2(1, 0.5f), new Vector2(-6, 0), new Vector2(78, 30));
             list = Scroll(right, out listContent);
             float sensitivity = NativeScrollSensitivity();
             nativeScroll = sensitivity > 0;
@@ -273,6 +281,8 @@ namespace MapTracker
                     row.Toggle.SetIsOnWithoutNotify(row.Entry.Selected);
                     row.Keep.interactable = row.Entry.CanKeep;
                     row.Keep.SetIsOnWithoutNotify(row.Entry.KeepVisible);
+                    row.Notify.interactable = row.Entry.Members.Exists(e => !e.creature && e.category != "Dropped items");
+                    row.Notify.SetIsOnWithoutNotify(row.Entry.Members.Exists(e => window.Host.Tracking.Discoveries.Notifies(e.key)));
                     row.Text.text = row.Entry.Label;
                     bool focused = row.Entry.Contains(window.FocusedKey);
                     row.Root.GetComponent<Image>().color = focused ? new Color(0.35f, 0.22f, 0.07f, 0.95f) : new Color(0, 0, 0, 0.2f);
@@ -305,14 +315,22 @@ namespace MapTracker
             row.Dungeon = dungeonIcon.gameObject.AddComponent<DungeonGraphic>(); row.Dungeon.color = Color.white; row.Dungeon.raycastTarget = false;
             dungeonIcon.gameObject.SetActive(false);
             row.Text = Label("", row.Root, 17, Beige, TextAnchor.MiddleLeft);
-            Stretch(row.Text.rectTransform, 80, 0, 124, 0);
+            Stretch(row.Text.rectTransform, 80, 0, 198, 0);
             var remember = Rect("KeepDiscovered", row.Root);
-            Pin(remember, new Vector2(1, 0.5f), new Vector2(-54, 0), new Vector2(25, 25));
+            Pin(remember, new Vector2(1, 0.5f), new Vector2(-134, 0), new Vector2(25, 25));
             var rememberImage = remember.gameObject.AddComponent<Image>(); rememberImage.sprite = checkboxSprite; rememberImage.type = Image.Type.Sliced;
             row.Keep = remember.gameObject.AddComponent<Toggle>(); row.Keep.targetGraphic = rememberImage;
             var remembered = Rect("Checked", remember); Stretch(remembered, 3, 3, 3, 3);
             var rememberedImage = remembered.gameObject.AddComponent<Image>(); rememberedImage.sprite = checkSprite; rememberedImage.color = Orange;
             row.Keep.graphic = rememberedImage;
+            var notify = Rect("NotifyDiscovery", row.Root);
+            Pin(notify, new Vector2(1, 0.5f), new Vector2(-45, 0), new Vector2(25, 25));
+            var notifyImage = notify.gameObject.AddComponent<Image>(); notifyImage.sprite = checkboxSprite; notifyImage.type = Image.Type.Sliced;
+            row.Notify = notify.gameObject.AddComponent<Toggle>(); row.Notify.targetGraphic = notifyImage;
+            var notifyCheck = Rect("Checked", notify); Stretch(notifyCheck, 3, 3, 3, 3);
+            var notifyCheckImage = notifyCheck.gameObject.AddComponent<Image>(); notifyCheckImage.sprite = checkSprite; notifyCheckImage.color = Orange;
+            row.Notify.graphic = notifyCheckImage;
+            row.Notify.onValueChanged.AddListener(value => { if (!updating && row.Entry != null) window.Host.Tracking.Discoveries.SetNotify(row.Entry.Members, value); });
             row.Keep.onValueChanged.AddListener(value => { if (!updating && row.Entry != null) window.SetKeepVisible(row.Entry, value); });
             row.Toggle.onValueChanged.AddListener(value =>
             { if (!updating && row.Entry != null) window.SetSelected(row.Entry, value); });

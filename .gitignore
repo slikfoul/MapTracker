@@ -1,5 +1,7 @@
 bin/
 obj/
+artifacts/
+backups/
 package/MapTracker.dll
 *.zip
 *.log

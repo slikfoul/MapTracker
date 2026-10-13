@@ -2,6 +2,7 @@ using System;
 using TMPro;
 using UnityEngine;
 using Object = UnityEngine.Object;
+using System.Collections.Generic;
 
 namespace MapTracker
 {
@@ -9,15 +10,20 @@ namespace MapTracker
     {
         private TextMeshProUGUI text;
         private string previousName;
+        private int previousFontSize;
         private bool reportedEmpty;
+        private static readonly Stack<TextMeshProUGUI> pool = new Stack<TextMeshProUGUI>();
+        internal static void ClearPool() { while (pool.Count > 0) { var t = pool.Pop(); if (t != null) Object.Destroy(t.gameObject); } }
         internal void Hide() { if (text != null) text.gameObject.SetActive(false); }
-        internal void Show(RectTransform parent, Minimap map, string name)
+        internal void Show(RectTransform parent, Minimap map, string name, int fontSize, Vector2? center = null)
         {
             RectTransform labelParent = map.m_pinRootSmall;
-            if (text != null && text.transform.parent != labelParent) { Object.Destroy(text.gameObject); text = null; }
+            if (text != null && text.transform.parent != labelParent) Dispose();
             if (text == null)
             {
-                text = NativeMapText.Create("MapTrackerNearbyCreatureName", labelParent, map);
+                while (pool.Count > 0 && text == null) text = pool.Pop();
+                if (text == null) text = NativeMapText.Create("MapTrackerNearbyCreatureName", labelParent, map);
+                else if (text.transform.parent != labelParent) text.transform.SetParent(labelParent, false);
                 previousName = null;
                 reportedEmpty = false;
                 text.fontSize = 13; text.color = Color.white; text.richText = false; text.raycastTarget = false;
@@ -25,24 +31,25 @@ namespace MapTracker
                 text.margin = Vector4.zero;
                 if (text.font != null) text.fontSharedMaterial = text.font.material;
                 text.alignment = TextAlignmentOptions.MidlineLeft; text.textWrappingMode = TextWrappingModes.NoWrap;
-                text.overflowMode = TextOverflowModes.Overflow;
+                text.overflowMode = TextOverflowModes.Ellipsis;
                 text.rectTransform.anchorMin = text.rectTransform.anchorMax = new Vector2(0.5f, 0.5f);
                 text.rectTransform.pivot = new Vector2(0, 0.5f);
                 text.rectTransform.sizeDelta = new Vector2(120, 18);
             }
             var canvas = labelParent.GetComponentInParent<Canvas>()?.rootCanvas;
             Camera camera = canvas != null && canvas.renderMode != RenderMode.ScreenSpaceOverlay ? canvas.worldCamera : null;
-            Vector2 screen = RectTransformUtility.WorldToScreenPoint(camera,
-                parent.TransformPoint(new Vector3(parent.rect.xMax + 3, parent.rect.center.y, 0)));
-            if (RectTransformUtility.ScreenPointToLocalPointInRectangle(labelParent, screen, camera, out var point))
-                text.rectTransform.localPosition = new Vector3(point.x, point.y, 0);
-            bool nameChanged = previousName != name;
+            bool styleChanged = NameTextStyle.Apply(text, fontSize, true);
+            bool nameChanged = previousName != name || previousFontSize != fontSize || styleChanged;
             if (nameChanged)
             {
-                previousName = name; text.text = name;
+                previousName = name; previousFontSize = fontSize; text.fontSize = fontSize; text.text = name;
                 Vector2 measured = text.GetPreferredValues(name);
-                text.rectTransform.sizeDelta = new Vector2(Mathf.Max(4, measured.x + 4), Mathf.Max(18, measured.y + 4));
+                text.rectTransform.sizeDelta = new Vector2(Mathf.Clamp(measured.x + 4, 4, 120), Mathf.Max(18, measured.y + 4));
             }
+            Vector2 screen = center.HasValue ? center.Value - new Vector2(text.rectTransform.rect.width * 0.5f * (canvas != null ? canvas.scaleFactor : 1), 0) :
+                RectTransformUtility.WorldToScreenPoint(camera, parent.TransformPoint(new Vector3(parent.rect.xMax + 3, parent.rect.center.y, 0)));
+            if (RectTransformUtility.ScreenPointToLocalPointInRectangle(labelParent, screen, camera, out var point))
+                text.rectTransform.localPosition = new Vector3(point.x, point.y, 0);
             text.gameObject.SetActive(true);
             if (nameChanged)
             {
@@ -73,6 +80,10 @@ namespace MapTracker
                 "," + bounds.Y.ToString("0", System.Globalization.CultureInfo.InvariantCulture) + "," + bounds.Width.ToString("0", System.Globalization.CultureInfo.InvariantCulture) +
                 "," + bounds.Height.ToString("0", System.Globalization.CultureInfo.InvariantCulture);
         }
-        public void Dispose() { if (text != null) Object.Destroy(text.gameObject); text = null; }
+        public void Dispose()
+        {
+            if (text != null) { text.gameObject.SetActive(false); if (pool.Count < 128) pool.Push(text); else Object.Destroy(text.gameObject); }
+            text = null; previousName = null;
+        }
     }
 }

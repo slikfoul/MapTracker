@@ -12,7 +12,8 @@ namespace MapTracker
         private float previousSize;
         private Color previousColor;
         private bool previousContrast;
-        internal void Update(RectTransform parent, Sprite sprite, Sprite dot, float size, Color color, bool visible, bool contrast)
+        private int previousThickness;
+        internal void Update(RectTransform parent, Sprite sprite, Sprite dot, float size, Color color, bool visible, bool contrast, int thickness)
         {
             if (root != null && root.parent != parent) { Object.Destroy(root.gameObject); root = null; }
             if (!visible || sprite == null)
@@ -31,12 +32,14 @@ namespace MapTracker
                 previousSprite = null;
             }
             if (root.gameObject.activeSelf && previousSprite == sprite && previousDot == dot && previousSize == size &&
-                previousColor == color && previousContrast == contrast) return;
+                previousColor == color && previousContrast == contrast && previousThickness == thickness) return;
             previousSprite = sprite; previousDot = dot; previousSize = size; previousColor = color; previousContrast = contrast;
+            previousThickness = thickness;
             root.gameObject.SetActive(true);
             root.anchoredPosition = Vector2.zero; root.sizeDelta = new Vector2(size, size);
             contour.enabled = contrast;
-            head.sprite = sprite; float headSize = contrast ? size - 4 : size;
+            contour.Thickness = thickness;
+            head.sprite = sprite; float headSize = size;
             head.rectTransform.sizeDelta = new Vector2(headSize, headSize);
             plainRelation.gameObject.SetActive(true); plainRelation.sprite = dot; plainRelation.color = color;
             plainRelation.rectTransform.anchoredPosition = new Vector2(size * 0.4f, -size * 0.4f);

@@ -21,6 +21,7 @@ namespace MapTracker
         }
         internal void Toggle() { if (Player.m_localPlayer != null) { Open = !Open; panel.SetVisible(Open); } }
         internal void Close() { Open = false; panel.SetVisible(false); }
+        internal void Refresh() { panel.Refresh(); }
         internal void Focus(CatalogEntry entry)
         {
             if (entry == null || Player.m_localPlayer == null) return;
@@ -31,7 +32,7 @@ namespace MapTracker
         {
             mapButton.Tick();
             if (Player.m_localPlayer == null) Close();
-            else if (Open && Input.GetKeyDown(KeyCode.Escape) && !panel.DismissPresets()) Close();
+            else if (Open && Input.GetKeyDown(KeyCode.Escape) && !panel.DismissDiscoveries() && !panel.DismissPresets()) Close();
             if (Open) panel.Tick();
         }
         internal bool ContainsMapButtonPointer() { return mapButton.ContainsPointer(); }

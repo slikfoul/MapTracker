@@ -10,7 +10,7 @@ namespace MapTracker
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "Slikfoul.MapTracker";
-        public const string Version = "0.1.23";
+        public const string Version = "0.7.0";
         internal static Plugin Instance;
         internal ConfigEntry<bool> Enabled, SmallMap, LargeMap, OtherPlayerPins;
         internal ConfigEntry<bool> Hostile, Friendly, Animals, Tamed;
@@ -21,8 +21,18 @@ namespace MapTracker
         internal ConfigEntry<bool> ShareMarkers;
         internal ConfigEntry<int> GroupThreshold, GroupDistance;
         internal ConfigEntry<int> MinimapCreatureIconSize, LargeMapCreatureIconSize;
-        internal ConfigEntry<int> MinimapNameDistance;
+        internal ConfigEntry<int> MinimapNameDistance, CreatureOutlineThickness;
+        internal ConfigEntry<int> CreatureNameSize, ObjectNameSize;
+        internal ConfigEntry<bool> GroupCreatureNames;
+        internal ConfigEntry<int> CreatureNameGroupRadius;
         internal ConfigEntry<int> DetectionRadius;
+        internal ConfigEntry<int> ScanBudget, NameMargin;
+        internal ConfigEntry<bool> NotifyDungeons;
+        internal ConfigEntry<string> NotifyTypes;
+        internal ConfigEntry<KeyboardShortcut> CancelNavigationKey;
+        internal ConfigEntry<bool> ShowNavigationArrow;
+        internal MapCategoryVisibility MapCategories;
+        internal PresetCycler Presets;
         internal float DetectionDistance => RadiusSetting.Distance(DetectionRadius.Value);
         internal bool SightDetection => DetectionRadius.Value == RadiusSetting.LineOfSight;
         internal Catalog Catalog;
@@ -36,26 +46,31 @@ namespace MapTracker
         {
             Instance = this;
             Enabled = Bind("General", "Enabled", true, "Включить мод", "Enable map markers.");
-            SmallMap = Bind("Maps", "Minimap", true, "Показывать на мини-карте", "Show on the minimap.");
-            LargeMap = Bind("Maps", "Large map", true, "Показывать на большой карте", "Show MapTracker markers on the large map.");
-            HideMinimapNames = Bind("Names", "Hide minimap names", false, "Скрывать подписи на мини-карте", "Hide MapTracker creature names on the minimap. When off, names show within Minimap name distance; a group uses its nearest member. Icons, stars and counts remain visible.");
-            MinimapNameDistance = Config.Bind("Names", "Minimap name distance", 60, new ConfigDescription("Maximum distance from the character for creature names on the minimap, in whole meters. Separate from detection radius: distant creature markers retain icons or dots without names. Applies when Hide minimap names is off.", new AcceptableValueRange<int>(5, 200), new ConfigurationManagerAttributes { DispName = "Дальность подписей существ на мини-карте, м" }));
-            HideLargeMapNames = Bind("Names", "Hide large map names", false, "Скрывать подписи на большой карте", "Hide persistent MapTracker names on the large map. Creature names remain available on hover and group details on click. Does not affect native/manual pins.");
-            CreatureIcons = Bind("Icons", "Creature icons", true, "Показывать существ иконками на большой карте", "Use creature trophy icons on the large map at close zoom. Turn off to use relationship-colored dots; stars and group counts remain visible.");
-            MinimapCreatureIcons = ConfigSections.CopyIfMissing(Config, CreatureIcons, "Minimap creature icons", true,
+            SmallMap = Bind("Minimap", "Minimap", true, "Показывать на мини-карте", "Show MapTracker markers on the minimap.");
+            LargeMap = Bind("Large map", "Large map", true, "Показывать на большой карте", "Show MapTracker markers on the large map.");
+            HideMinimapNames = Bind("Minimap", "Hide minimap names", false, "Скрывать подписи на мини-карте", "Hide MapTracker creature names on the minimap. When off, names show within Minimap name distance; a group uses its nearest member. Icons, stars and counts remain visible.");
+            MinimapNameDistance = ConfigSections.Bind(Config, "Names", "Minimap", "Minimap name distance", DefaultSettings.Value("Minimap", "Minimap name distance", 60), new ConfigDescription("Maximum distance from the character for creature names on the minimap, in whole meters. Separate from detection radius: distant creature markers retain icons or dots without names. Applies when Hide minimap names is off.", new AcceptableValueRange<int>(5, 200), new ConfigurationManagerAttributes { DispName = "Minimap name distance (m)" }));
+            CreatureNameSize = Config.Bind("Names", "Creature name size", 14, new ConfigDescription("Creature name font size on both maps and in hover labels. Larger text automatically leaves less room for other names.", new AcceptableValueRange<int>(8, 28)));
+            ObjectNameSize = Config.Bind("Names", "Object name size", 18, new ConfigDescription("Font size for portal, dungeon and other object names, including hover labels. Does not change native/manual pin names or navigation HUD text.", new AcceptableValueRange<int>(8, 28)));
+            GroupCreatureNames = Config.Bind("Names", "Group creature names", false, "Combine nearby names of the same creature type into one centered name and count. Marker positions and icon grouping are unchanged. The selected navigation target keeps its individual name.");
+            CreatureNameGroupRadius = Config.Bind("Names", "Creature name group radius", 15, new ConfigDescription("Nearby creatures of the same type share a centered name within this world-distance radius. Applies when Group creature names is enabled; separate from discovery radius and icon grouping.", new AcceptableValueRange<int>(1, 100), new ConfigurationManagerAttributes { DispName = "Creature name group radius (m)" }));
+            HideLargeMapNames = Bind("Large map", "Hide large map names", false, "Скрывать подписи на большой карте", "Hide persistent MapTracker names on the large map. Creature names remain available on hover and group details on click. Does not affect native/manual pins.");
+            CreatureIcons = Bind("Large map", "Creature icons", true, "Показывать существ иконками на большой карте", "Use creature trophy icons on the large map at close zoom. Turn off to use relationship-colored dots; stars and group counts remain visible.");
+            MinimapCreatureIcons = ConfigSections.Bind(Config, "Icons", "Minimap", "Minimap creature icons", DefaultSettings.Value("Minimap", "Minimap creature icons", true),
                 new ConfigDescription("Use creature trophy icons on the minimap independently of the large map. Turn off to use relationship-colored dots; names, stars and group counts retain their own settings.", null,
-                    new ConfigurationManagerAttributes { DispName = "Показывать существ иконками на мини-карте" }));
-            ContrastCreatureIcons = Bind("Icons", "Contrast creature icons", true, "Контрастные значки существ", "Outline creature icons along their transparent silhouette on both maps, with a dark outer edge and a lighter inner edge. No circular background or clipping. Turn off for plain heads. Relationship-colored dots and stars remain. Applies when Creature icons is enabled.");
-            MinimapCreatureIconSize = Config.Bind("Icons", "Minimap creature icon size", 26, new ConfigDescription("Creature icon size on the minimap, in UI pixels. Applies to icon mode; colored dot sizes remain unchanged.", new AcceptableValueRange<int>(12, 48), new ConfigurationManagerAttributes { DispName = "Размер иконок существ на мини-карте" }));
-            LargeMapCreatureIconSize = Config.Bind("Icons", "Large map creature icon size", 30, new ConfigDescription("Creature icon size on the large map, in UI pixels. Applies at icon-visible zoom; distant colored dots remain unchanged.", new AcceptableValueRange<int>(12, 64), new ConfigurationManagerAttributes { DispName = "Размер иконок существ на большой карте" }));
+                    new ConfigurationManagerAttributes { DispName = "Creature icons on minimap" }));
+            ContrastCreatureIcons = Bind("Icons", "Contrast creature icons", true, "Контрастные значки существ", "Add a solid black outline along each creature icon's transparent silhouette on both maps. No circular background, colored copies or clipping. Turn off for plain heads. Relationship-colored dots and stars remain. Applies when creature icons are enabled.");
+            CreatureOutlineThickness = Config.Bind("Icons", "Creature outline thickness", 1, new ConfigDescription("Thickness of the solid black outline along the icon silhouette, in whole UI pixels, on both maps. Requires Contrast creature icons and icon mode. The head itself keeps its chosen size.", new AcceptableValueRange<int>(1, 4)));
+            MinimapCreatureIconSize = ConfigSections.Bind(Config, "Icons", "Minimap", "Minimap creature icon size", DefaultSettings.Value("Minimap", "Minimap creature icon size", 26), new ConfigDescription("Creature icon size on the minimap, in UI pixels. Applies to icon mode; colored dot sizes remain unchanged.", new AcceptableValueRange<int>(12, 48), new ConfigurationManagerAttributes { DispName = "Minimap creature icon size" }));
+            LargeMapCreatureIconSize = ConfigSections.Bind(Config, "Icons", "Large map", "Large map creature icon size", DefaultSettings.Value("Large map", "Large map creature icon size", 30), new ConfigDescription("Creature icon size on the large map, in UI pixels. Applies at icon-visible zoom; distant colored dots remain unchanged.", new AcceptableValueRange<int>(12, 64), new ConfigurationManagerAttributes { DispName = "Large map creature icon size" }));
             OtherPlayerPins = Bind("Sharing", "Other player pins", true, "Показывать метки других игроков", "Show pins from the cartography table and discoveries received from other MapTracker players. Does not control live player positions or your own pins.");
             ShareMarkers = Bind("Sharing", "Share discoveries", false, "Делиться метками с другими игроками", "Share static discoveries and live creature positions with other MapTracker players on this server. Received data is not forwarded. No server plugin is required.");
             DetectionRadius = RadiusSetting.Bind(Config, DrawRadius);
             GroupMarkers = Bind("Grouping", "Group markers", true, "Группировать близкие метки", "Combine overlapping markers of the same type; groups split when zooming in.");
             GroupPlants = Bind("Grouping", "Group plants", false, "Группировать растения", "Group plants, pickables and wild beehives when general marker grouping is enabled. Off keeps each marker at its actual location. Saved in custom presets; Gathering turns it off.");
             GroupCreatures = Bind("Grouping", "Group creatures", true, "Группировать существ", "Allow creature markers to group when general marker grouping is enabled. Turn off to keep creatures separate while portals and other objects still group.");
-            GroupThreshold = ConfigSections.Bind(Config, "General", "Grouping", "Group threshold", 3, new ConfigDescription("Minimum number of nearby markers to form a group.", new AcceptableValueRange<int>(2, 10), new ConfigurationManagerAttributes { DispName = "Минимум меток в группе" }));
-            GroupDistance = ConfigSections.Bind(Config, "General", "Grouping", "Group distance", 36, new ConfigDescription("Maximum screen distance between neighboring markers to group, in UI pixels. Zooming out covers more world space; chains of neighbors may span a wider area. Turn off Group plants for exact plant locations.", new AcceptableValueRange<int>(8, 64), new ConfigurationManagerAttributes { DispName = "Расстояние группировки (пиксели)" }));
+            GroupThreshold = ConfigSections.Bind(Config, "General", "Grouping", "Group threshold", DefaultSettings.Value("Grouping", "Group threshold", 3), new ConfigDescription("Minimum number of nearby markers to form a group.", new AcceptableValueRange<int>(2, 10), new ConfigurationManagerAttributes { DispName = "Minimum markers per group" }));
+            GroupDistance = ConfigSections.Bind(Config, "General", "Grouping", "Group distance", DefaultSettings.Value("Grouping", "Group distance", 400), new ConfigDescription("Maximum distance between the furthest members of a group in world meters. Default: 400; maximum: 800. Markers only group when their displayed icons overlap or nearly touch. Zooming in splits groups as soon as the icons have room. This limit never forces separated screen markers into a group. Click a group to reveal exact member locations.", new AcceptableValueRange<int>(8, 800), new ConfigurationManagerAttributes { DispName = "Maximum group span (m)" }));
             Hostile = Bind("Creatures", "Hostile", true, "Враждебные существа", "Creatures hostile to your character.");
             Friendly = Bind("Creatures", "Friendly", false, "Дружественные существа", "Friendly creatures, including calm Dvergr.");
             Animals = Bind("Creatures", "Animals", false, "Нейтральные животные", "Non-aggressive wildlife.");
@@ -63,17 +78,29 @@ namespace MapTracker
             ShowPickedPlants = Bind("Completed", "Plants", false, "Показывать собранное: растения и добыча", "Show collected plants and loot with a completed mark.");
             ShowMined = Bind("Completed", "Ore", false, "Показывать собранное: руда", "Show depleted deposits with a completed mark.");
             ShowCompleted = Bind("Completed", "Dungeons", true, "Показывать пройденные подземелья", "Show manually completed dungeon entrances.");
+            ScanBudget = Config.Bind("Performance", "Scan budget ms", 2, new ConfigDescription("Maximum scan work per frame in milliseconds. A single object inspection may exceed this budget.", new AcceptableValueRange<int>(1, 8)));
+            NameMargin = Config.Bind("Names", "Name distance hysteresis meters", 5, new ConfigDescription("Names appear inside their distance limit and disappear this many meters beyond it, reducing flicker.", new AcceptableValueRange<int>(0, 30)));
+            NotifyDungeons = Config.Bind("Notifications", "New dungeons", false, "Notify once when a new local dungeon entrance is actually detected. Previously saved entrances do not notify.");
+            NotifyTypes = Config.Bind("Notifications", "Object type keys", "", "Comma-separated catalog keys for discovery notifications. Use Notify type in Discoveries to add or remove a type.");
+            CancelNavigationKey = Config.Bind("Navigation", "Cancel navigation key", new KeyboardShortcut(KeyCode.F10), "Cancel the current object or map-point destination. Automatic arrival stops navigation within 5 meters. Disabled while typing or using menus.");
+            ShowNavigationArrow = Config.Bind("Navigation", "Show navigation arrow", true, "Show a direction arrow, destination name and distance at the top of the gameplay screen. The arrow turns relative to the camera: up is ahead and down is behind. Hides while the large map or menus are open; turning this off keeps the map destination and navigation active.");
+            MapCategories = new MapCategoryVisibility(Config);
             Catalog = new Catalog(this);
             Window = new FilterWindow(this);
             Tracking = new Tracking(this);
+            Presets = new PresetCycler(this);
+            Config.SettingChanged += (_, __) => Tracking.SettingsChanged();
             OtherPlayerPins.SettingChanged += (_, __) => Tracking.RequestPinRefresh();
             Enabled.SettingChanged += (_, __) => Tracking.RequestPinRefresh();
             HideMinimapNames.SettingChanged += (_, __) => { Tracking.RequestPinRefresh(); Tracking.ResetNameDiagnostics(); };
             MinimapNameDistance.SettingChanged += (_, __) => { Tracking.RequestPinRefresh(); Tracking.ResetNameDiagnostics(); };
+            CreatureNameSize.SettingChanged += (_, __) => Tracking.RequestPinRefresh();
+            ObjectNameSize.SettingChanged += (_, __) => Tracking.RequestPinRefresh();
             HideLargeMapNames.SettingChanged += (_, __) => Tracking.RequestPinRefresh();
             CreatureIcons.SettingChanged += (_, __) => Tracking.RequestPinRefresh();
             MinimapCreatureIcons.SettingChanged += (_, __) => Tracking.RequestPinRefresh();
             ContrastCreatureIcons.SettingChanged += (_, __) => Tracking.RequestPinRefresh();
+            CreatureOutlineThickness.SettingChanged += (_, __) => Tracking.RequestPinRefresh();
             MinimapCreatureIconSize.SettingChanged += (_, __) => Tracking.RequestPinRefresh();
             LargeMapCreatureIconSize.SettingChanged += (_, __) => Tracking.RequestPinRefresh();
             GroupCreatures.SettingChanged += (_, __) => Tracking.RequestPinRefresh();
@@ -84,10 +111,10 @@ namespace MapTracker
             PresetRevision = Config.Bind("Internal", "Minimal preset revision", 0,
                 new ConfigDescription("Migration revision for the initial minimal filter set.", null, new ConfigurationManagerAttributes { Browsable = false }));
             ConfigSections.Bind(Config, "General", "Tools", "Open filters", false, new ConfigDescription("Open the searchable category and type selector.", null,
-                new ConfigurationManagerAttributes { DispName = "Фильтры", CustomDrawer = entry =>
+                new ConfigurationManagerAttributes { DispName = "Filters", CustomDrawer = entry =>
                 { if (GUILayout.Button(Text("Открыть фильтры", "Open filters"))) Window.Toggle(); } }));
             ConfigSections.Bind(Config, "General", "Tools", "Export catalog", false, new ConfigDescription("Export the game-derived catalog to BepInEx/config/MapTracker/catalog.json.", null,
-                new ConfigurationManagerAttributes { DispName = "Выгрузка каталога", CustomDrawer = entry =>
+                new ConfigurationManagerAttributes { DispName = "Export catalog", CustomDrawer = entry =>
                 { if (GUILayout.Button(Text("Выгрузить каталог", "Export catalog"))) Catalog.Export(); } }));
             harmony = new Harmony(Guid);
             harmony.PatchAll();
@@ -105,8 +132,8 @@ namespace MapTracker
 
         internal ConfigEntry<T> Bind<T>(string section, string key, T value, string ru, string description)
         {
-            return ConfigSections.Bind(Config, ConfigSections.PreviousSection(section, key), section, key, value, new ConfigDescription(description, null,
-                new ConfigurationManagerAttributes { DispName = ru }));
+            return DefaultSettings.Bind(Config, ConfigSections.PreviousSection(section, key), section, key, value, new ConfigDescription(description, null,
+                new ConfigurationManagerAttributes { DispName = key }));
         }
         private static void DrawRadius(ConfigEntryBase entry)
         {
@@ -122,13 +149,13 @@ namespace MapTracker
 
         internal static string Text(string ru, string en)
         {
-            return Localization.instance != null && Localization.instance.GetSelectedLanguage() == "Russian" ? ru : en;
+            return en;
         }
 
         internal static string Localize(string value)
         {
             if (string.IsNullOrEmpty(value)) return "";
-            return Localization.instance != null ? Localization.instance.Localize(value) : value;
+            return EnglishLocalization.Translate(value);
         }
 
         private void Update()
@@ -138,6 +165,7 @@ namespace MapTracker
                 Catalog.Tick();
                 Window.Tick();
                 Tracking.Tick();
+                Tracking.Discoveries.HandleCancelKey();
                 sharing.Tick();
             }
             catch (Exception e)
@@ -165,6 +193,7 @@ namespace MapTracker
         {
             Window?.Dispose();
             Tracking?.Dispose();
+            CreatureNearbyName.ClearPool();
             CustomCreatureIcons.Dispose();
             harmony?.UnpatchSelf();
             Instance = null;

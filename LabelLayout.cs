@@ -10,6 +10,44 @@ namespace MapTracker
     }
     internal static class LabelLayout
     {
+        internal static bool Inside(LabelBox box, LabelBox area) => box.X >= area.X && box.Y >= area.Y &&
+            box.X + box.Width <= area.X + area.Width && box.Y + box.Height <= area.Y + area.Height;
+
+        internal sealed class Selection
+        {
+            private LabelBox[] previous;
+            private bool[] selected;
+            private SpatialOverlap index;
+            private float previousGap;
+            private bool cached;
+            internal bool[] Choose(IReadOnlyList<LabelBox> boxes, float gap)
+            {
+                if (previous == null || previous.Length != boxes.Count)
+                {
+                    previous = new LabelBox[boxes.Count]; selected = new bool[boxes.Count];
+                    index = new SpatialOverlap(previous, gap); cached = false;
+                }
+                bool translated = cached && previousGap == gap;
+                float dx = boxes.Count > 0 ? boxes[0].X - previous[0].X : 0;
+                float dy = boxes.Count > 0 ? boxes[0].Y - previous[0].Y : 0;
+                for (int i = 0; translated && i < boxes.Count; i++)
+                    translated = boxes[i].Width == previous[i].Width && boxes[i].Height == previous[i].Height &&
+                        System.Math.Abs(boxes[i].X - previous[i].X - dx) < 0.001f &&
+                        System.Math.Abs(boxes[i].Y - previous[i].Y - dy) < 0.001f;
+                if (!translated)
+                {
+                    index.Reset(gap);
+                    for (int i = 0; i < boxes.Count; i++)
+                    {
+                        previous[i] = boxes[i]; selected[i] = index.Overlap(boxes[i]) == 0;
+                        if (selected[i]) index.Add(i);
+                    }
+                }
+                else for (int i = 0; i < boxes.Count; i++) previous[i] = boxes[i];
+                cached = true; previousGap = gap;
+                return selected;
+            }
+        }
         internal static LabelBox[] Place(IReadOnlyList<LabelBox> boxes, float gap)
             => new Placement().Place(boxes, gap);
 
@@ -134,22 +172,6 @@ namespace MapTracker
         // Candidates arrive in nearest-first order. Keep every label that fits,
         // without moving names away from their actual creature markers.
         internal static bool[] Choose(IReadOnlyList<LabelBox> boxes, float gap)
-        {
-            var selected = new bool[boxes.Count];
-            for (int i = 0; i < boxes.Count; i++)
-            {
-                bool fits = true;
-                for (int j = 0; j < i; j++)
-                {
-                    if (!selected[j]) continue;
-                    var a = boxes[i]; var b = boxes[j];
-                    if (a.X < b.X + b.Width + gap && a.X + a.Width + gap > b.X &&
-                        a.Y < b.Y + b.Height + gap && a.Y + a.Height + gap > b.Y)
-                    { fits = false; break; }
-                }
-                selected[i] = fits;
-            }
-            return selected;
-        }
+            => new Selection().Choose(boxes, gap);
     }
 }

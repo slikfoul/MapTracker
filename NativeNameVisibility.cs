@@ -21,7 +21,7 @@ namespace MapTracker
                 }
             }
             if (mask != null && mask.alpha != (visible ? 1 : 0)) mask.alpha = visible ? 1 : 0;
-            if (!visible && root != null && root.activeSelf) root.SetActive(false);
+            if (root != null && root.activeSelf != visible) root.SetActive(visible);
         }
         public void Dispose()
         {

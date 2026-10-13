@@ -7,6 +7,17 @@ $ErrorActionPreference = 'Stop'
 if (Get-Process -Name valheim -ErrorAction SilentlyContinue) { throw 'Close Valheim before replacing the plugin DLL.' }
 if (-not (Test-Path -LiteralPath "$Profile\BepInEx\core\BepInEx.dll")) { throw 'Profile BepInEx installation not found.' }
 $sourcePath = (Resolve-Path -LiteralPath $Dll).Path
+if (-not $IncludeMigration) {
+    $profilesRoot = [IO.Path]::GetFullPath((Join-Path $env:APPDATA 'Thunderstore Mod Manager\DataFolder\Valheim\profiles'))
+    $profilePath = [IO.Path]::GetFullPath($Profile).TrimEnd([IO.Path]::DirectorySeparatorChar)
+    if ([IO.Path]::GetDirectoryName($profilePath) -eq $profilesRoot -and (Test-Path -LiteralPath (Join-Path $profilePath 'mods.yml'))) {
+        $releaseDll = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'bin\Release\MapTracker.dll'))
+        if ($sourcePath -ne $releaseDll) { throw 'Registered installation requires the Release DLL used by BuildPackage.ps1.' }
+        & (Join-Path $PSScriptRoot 'BuildPackage.ps1') -SkipBuild
+        & (Join-Path $PSScriptRoot 'RegisterLocalMod.ps1') -Profile ([IO.Path]::GetFileName($profilePath))
+        return
+    }
+}
 $version = [Reflection.AssemblyName]::GetAssemblyName($sourcePath).Version.ToString()
 $pluginDirectory = Join-Path $Profile 'BepInEx\plugins\Slikfoul-MapTracker'
 New-Item -ItemType Directory -Path $pluginDirectory -Force | Out-Null

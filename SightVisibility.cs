@@ -1,4 +1,6 @@
 using UnityEngine;
+using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 
 namespace MapTracker
 {
@@ -8,6 +10,13 @@ namespace MapTracker
         private readonly Vector3[] samples = new Vector3[6];
         private Plane[] planes;
         private Camera camera;
+        private sealed class Geometry
+        {
+            internal float NextRefresh;
+            internal readonly List<Collider> Colliders = new List<Collider>();
+            internal readonly List<Renderer> Renderers = new List<Renderer>();
+        }
+        private readonly ConditionalWeakTable<ZNetView, Geometry> geometries = new ConditionalWeakTable<ZNetView, Geometry>();
         private int frame = -1, remaining;
         private readonly int blockers = LayerMask.GetMask("Default", "Default_small", "static_solid", "piece", "terrain", "vehicle", "character", "character_net");
         internal bool Check(ZNetView view, Vector3 position, Player player, out bool visible)
@@ -22,14 +31,24 @@ namespace MapTracker
             if (camera == null || player == null) return true;
             var bounds = new Bounds(position + Vector3.up, new Vector3(1, 2, 1));
             bool found = false;
-            foreach (var collider in view.GetComponentsInChildren<Collider>())
+            var geometry = geometries.GetValue(view, _ => new Geometry());
+            if (Time.realtimeSinceStartup >= geometry.NextRefresh)
             {
+                geometry.Colliders.Clear(); geometry.Renderers.Clear();
+                view.GetComponentsInChildren<Collider>(false, geometry.Colliders);
+                view.GetComponentsInChildren<Renderer>(false, geometry.Renderers);
+                geometry.NextRefresh = Time.realtimeSinceStartup + 5;
+            }
+            foreach (var collider in geometry.Colliders)
+            {
+                if (collider == null) continue;
                 if (!collider.enabled || collider.isTrigger || collider.bounds.center.y > 3000f) continue;
                 if (found) bounds.Encapsulate(collider.bounds); else { bounds = collider.bounds; found = true; }
             }
             if (!found)
-                foreach (var renderer in view.GetComponentsInChildren<Renderer>())
+                foreach (var renderer in geometry.Renderers)
                 {
+                    if (renderer == null) continue;
                     if (!renderer.enabled || renderer is ParticleSystemRenderer || renderer.bounds.center.y > 3000f) continue;
                     if (found) bounds.Encapsulate(renderer.bounds); else { bounds = renderer.bounds; found = true; }
                 }

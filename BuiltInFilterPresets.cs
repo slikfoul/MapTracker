@@ -22,13 +22,14 @@ namespace MapTracker
                 groupPlants = kind == BuiltInFilterPreset.Gathering ? (bool?)false : null,
                 types = entries.ToDictionary(e => e.key, e => new FilterPresetType
                 {
-                    selected = Includes(e, kind),
+                    selected = kind == BuiltInFilterPreset.Default ? DefaultSelected(e) : Includes(e, kind),
                     keep = Includes(e, kind) && !e.creature && e.category != "Dropped items" && e.category != "Plants and pickables" &&
                         (kind != BuiltInFilterPreset.Default || DiscoveryVisibility.KeepByDefault(e.dungeon, e.category))
                 })
             };
         }
-        internal static bool DefaultSelected(CatalogEntry entry) => Includes(entry, BuiltInFilterPreset.Default);
+        internal static bool DefaultSelected(CatalogEntry entry) => DefaultSettings.Value("Types",
+            entry.key.Replace('=', '_').Replace('[', '_').Replace(']', '_'), Includes(entry, BuiltInFilterPreset.Default));
         internal static bool IsPlantMarker(CatalogEntry entry) =>
             entry.category == "Plants and pickables" || entry.category == "Wild beehives";
         private static bool Includes(CatalogEntry entry, BuiltInFilterPreset kind)

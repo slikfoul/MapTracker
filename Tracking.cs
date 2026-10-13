@@ -19,6 +19,7 @@ namespace MapTracker
         public long pickedTime;
         public string portalTag;
         public bool imported;
+        public bool favorite;
         public bool shared;
         public long sourcePeer;
         public int creatureLevel, creatureRelation;
@@ -35,6 +36,14 @@ namespace MapTracker
         [NonSerialized] internal List<MarkerRecord> group;
         [NonSerialized] internal ClusterBadge badge;
         [NonSerialized] internal NativeNameVisibility nameVisibility;
+        [NonSerialized] internal string nameCache;
+        [NonSerialized] internal bool nearbyNameShown;
+        [NonSerialized] internal bool largeNameShown;
+        [NonSerialized] internal bool nameGroupFollower;
+        [NonSerialized] internal List<MarkerRecord> nameGroupMembers;
+        [NonSerialized] internal Vector2 nameGroupScreen;
+        [NonSerialized] internal string nameGroupCaption, nameGroupBase;
+        [NonSerialized] internal int nameGroupCount;
     }
     [Serializable]
     public sealed class MarkerFile
@@ -54,6 +63,15 @@ namespace MapTracker
         private static readonly MethodInfo RockEmpty = AccessTools.Method(typeof(MineRock), "AllDestroyed");
         private static readonly MethodInfo Rock5Empty = AccessTools.Method(typeof(MineRock5), "AllDestroyed");
         private List<KeyValuePair<ZDO, ZNetView>> snapshot;
+        private readonly List<KeyValuePair<ZDO, ZNetView>> snapshotBuffer = new List<KeyValuePair<ZDO, ZNetView>>();
+        private readonly HashSet<MarkerRecord> pinChanges = new HashSet<MarkerRecord>();
+        private readonly List<string> expiredRecords = new List<string>();
+        private bool fullPinRefresh;
+        private string language;
+        internal readonly DiscoveryTools Discoveries;
+        internal IEnumerable<MarkerRecord> Records => records.Values;
+        internal bool Contains(MarkerRecord record) => records.TryGetValue(record.id, out var r) && r == record;
+        internal void DiscoveryChanged(MarkerRecord record) { record.nameCache = null; dirty = true; SettingsChanged(); }
         private int cursor;
         private int scanSerial;
         private float nextScan, nextSave;
@@ -65,17 +83,23 @@ namespace MapTracker
         private readonly Dictionary<Minimap.PinData, SharedPinMask> hiddenSharedPins = new Dictionary<Minimap.PinData, SharedPinMask>();
         private readonly List<Minimap.PinData> releasedSharedPins = new List<Minimap.PinData>();
         private readonly MarkerGrouping grouping = new MarkerGrouping();
+        private readonly CreatureNameGroups creatureNameGroups = new CreatureNameGroups();
         private readonly CreatureHoverName creatureHover = new CreatureHoverName();
         private readonly List<MarkerRecord> nearbyNames = new List<MarkerRecord>();
         private readonly List<LabelBox> nearbyNameBoxes = new List<LabelBox>();
-        private readonly LabelLayout.Placement nearbyPlacement = new LabelLayout.Placement();
+        private readonly LabelLayout.Selection nearbySelection = new LabelLayout.Selection();
         private readonly LargeMapLabelLayout largeLabels = new LargeMapLabelLayout();
         private readonly PlayerMarkerLayer playerLayer = new PlayerMarkerLayer();
         private readonly SightVisibility sight = new SightVisibility();
+        private readonly PortalReconciliation portalReconciliation = new PortalReconciliation();
+        private readonly List<MarkerRecord> portalCandidates = new List<MarkerRecord>();
+        private readonly List<ZDO> nearbyPortalData = new List<ZDO>();
+        private float nextPortalCheck;
         private float pendingDeadline;
         private float nextEarlyRefresh;
         private bool definitionsResolved;
-        internal Tracking(Plugin plugin) { host = plugin; }
+        internal Tracking(Plugin plugin) { host = plugin; Discoveries = new DiscoveryTools(this, plugin); }
+        internal void SettingsChanged() { fullPinRefresh = true; grouping.Invalidate(); creatureNameGroups.Invalidate(); }
         private int nameDiagnosticSamples;
         private float nextNameDiagnostic;
         internal void ResetNameDiagnostics() { nameDiagnosticSamples = 0; nextNameDiagnostic = Time.realtimeSinceStartup + 2; }
@@ -114,18 +138,25 @@ namespace MapTracker
                 return;
             }
             if (!definitionsResolved) { ResolveSavedDefinitions(); RefreshPins(); definitionsResolved = true; }
+            string currentLanguage = Localization.instance?.GetSelectedLanguage();
+            if (language != currentLanguage) { language = currentLanguage; SettingsChanged(); }
+            if (fullPinRefresh) { fullPinRefresh = false; foreach (var r in records.Values) r.nameCache = null; RefreshPins(); }
             if (snapshot == null && Time.realtimeSinceStartup >= nextScan)
             {
                 scanSerial++;
                 var instances = Instances.GetValue(ZNetScene.instance) as Dictionary<ZDO, ZNetView>;
-                snapshot = instances?.ToList() ?? new List<KeyValuePair<ZDO, ZNetView>>();
+                snapshotBuffer.Clear();
+                if (instances != null) foreach (var pair in instances) snapshotBuffer.Add(pair);
+                snapshot = snapshotBuffer;
                 cursor = 0;
             }
             if (snapshot != null)
             {
-                int end = Math.Min(snapshot.Count, cursor + 128);
+                long scanStart = System.Diagnostics.Stopwatch.GetTimestamp();
+                int end = snapshot.Count;
                 for (; cursor < end; cursor++)
                 {
+                    if (cursor > 0 && !ScanTimeBudget.WithinBudget(scanStart, host.ScanBudget.Value)) break;
                     var pair = snapshot[cursor];
                     if (pair.Value == null || pair.Value.GetZDO() != pair.Key) continue;
                     try { if (!Observe(pair.Key, pair.Value)) break; }
@@ -134,25 +165,32 @@ namespace MapTracker
                 if (cursor >= snapshot.Count)
                 {
                     foreach (var record in records.Values)
-                        if (!record.shared && record.observationScan != scanSerial) { record.live = false; record.sightVisible = false; }
+                        if (!record.shared && record.observationScan != scanSerial)
+                        { if (record.live || record.sightVisible) pinChanges.Add(record); record.live = false; record.sightVisible = false; }
                     foreach (string id in records.Where(kv => kv.Value.dynamic && !kv.Value.shared && !kv.Value.live).Select(kv => kv.Key).ToList())
                     {
                         RemovePin(records[id]); records.Remove(id);
                     }
                     snapshot = null; nextScan = Time.realtimeSinceStartup + (host.SightDetection ? 0.15f : 0.5f);
-                    RefreshPins();
+                    RefreshPins(false);
                 }
             }
-            foreach (string id in records.Where(kv => kv.Value.shared && kv.Value.dynamic && Time.realtimeSinceStartup > kv.Value.expiresAt).Select(kv => kv.Key).ToList())
+            expiredRecords.Clear();
+            foreach (var pair in records)
+                if (pair.Value.shared && pair.Value.dynamic && Time.realtimeSinceStartup > pair.Value.expiresAt) expiredRecords.Add(pair.Key);
+            foreach (string id in expiredRecords)
             { RemovePin(records[id]); records.Remove(id); }
             bool positionsChanged = false;
             foreach (var record in records.Values)
                 if (record.dynamic && record.pin != null && record.character != null)
                 {
                     Vector3 position = record.character.transform.position;
+                    record.position = position;
                     if (record.pin.m_pos != position) { record.pin.m_pos = position; positionsChanged = true; }
                 }
             if (positionsChanged) RequestPinRefresh();
+            ReconcilePortals(player);
+            Discoveries.Tick();
             if (pendingEntrance != null)
             {
                 if (!player.IsTeleporting() && player.InInterior()) { MarkVisited(pendingEntrance); pendingEntrance = null; }
@@ -191,18 +229,31 @@ namespace MapTracker
                 if (!sight.Check(view, position, Player.m_localPlayer, out visibleNow)) return false;
                 if (!visibleNow && !records.ContainsKey(id)) return true;
             }
-            if (!records.TryGetValue(id, out var record))
+            bool newIdentity = !records.TryGetValue(id, out var record);
+            bool newDiscovery = false;
+            if (newIdentity)
             {
                 if (entry.dungeon)
-                    record = records.Values.FirstOrDefault(r => r.imported && r.entry?.dungeon == true &&
-                        Utils.DistanceXZ(r.position, view.transform.position) < 2f);
+                    record = DungeonDiscoveries.Rebind(records, id, entry, position, RemovePin);
+                else if (entry.category == "Portals")
+                    // Network IDs can change when an older world is reloaded.
+                    // Rebind the remembered physical portal rather than duplicate it.
+                    record = records.Values.FirstOrDefault(r => !r.shared && r.entry?.category == "Portals" &&
+                        (r.position - position).sqrMagnitude < 1f);
                 if (record != null)
                 {
-                    records.Remove(record.id); record.id = id; record.type = entry.key; record.entry = entry;
+                    if (!entry.dungeon)
+                    { records.Remove(record.id); record.id = id; record.type = entry.key; record.entry = entry; }
+                    dirty = true;
                 }
-                else record = new MarkerRecord { id = id, type = entry.key, entry = entry, position = view.transform.position, dynamic = dynamic };
+                else
+                {
+                    record = new MarkerRecord { id = id, type = entry.key, entry = entry, position = position, dynamic = dynamic };
+                    newDiscovery = true;
+                }
                 records.Add(id, record); if (!dynamic) dirty = true;
             }
+            bool presentationChanged = newIdentity || !record.live || record.entry != entry || record.sightVisible != visibleNow || dynamic;
             record.entry = entry; record.character = ch; record.dynamic = dynamic; record.live = true;
             record.observationScan = scanSerial;
             record.sightVisible = visibleNow;
@@ -210,9 +261,9 @@ namespace MapTracker
             if (view.GetComponent<TeleportWorld>() is TeleportWorld portal)
             {
                 string tag = portal.GetText();
-                if (record.portalTag != tag) { record.portalTag = tag; dirty = true; }
+                if (record.portalTag != tag) { record.portalTag = tag; dirty = presentationChanged = true; }
             }
-            if (record.position != position) { record.position = position; if (!dynamic) dirty = true; }
+            if (record.position != position) { record.position = position; presentationChanged = true; if (!dynamic) dirty = true; }
             bool collected = false;
             Pickable plant = view.GetComponent<Pickable>();
             if (plant != null)
@@ -222,7 +273,9 @@ namespace MapTracker
             }
             else if (view.GetComponent<MineRock>() is MineRock rock && RockEmpty != null) collected = (bool)RockEmpty.Invoke(rock, null);
             else if (view.GetComponent<MineRock5>() is MineRock5 rock5 && Rock5Empty != null) collected = (bool)Rock5Empty.Invoke(rock5, null);
-            if (record.collected != collected) { record.collected = collected; if (!dynamic) dirty = true; }
+            if (record.collected != collected) { record.collected = collected; presentationChanged = true; if (!dynamic) dirty = true; }
+            if (presentationChanged) { record.nameCache = null; pinChanges.Add(record); }
+            if (newDiscovery) Discoveries.Detected(record);
             return true;
         }
 
@@ -231,18 +284,72 @@ namespace MapTracker
             try
             {
                 if (!records.TryGetValue(zdo.m_uid.ToString(), out var record)) return;
-                if (record.dynamic) { RemovePin(record); records.Remove(record.id); return; }
-                // This event confirms network destruction. Instance unloading does not raise it.
-                record.collected = true; record.live = false; dirty = true;
+                record.nameCache = null;
+                if (record.entry == null) record.entry = host.Catalog.GetSavedDefinition(record.type);
+                dirty |= MarkerLifetime.Destroyed(records, record.id, RemovePin);
                 RefreshPins();
             }
             catch (Exception e) { host.Report("Destroyed-object tracking failed", e); }
         }
 
+        private void ReconcilePortals(Player player)
+        {
+            float now = Time.realtimeSinceStartup;
+            if (now < nextPortalCheck) return;
+            nextPortalCheck = now + 1f;
+            if (player.IsTeleporting() || player.InInterior() || manager == null ||
+                ZNet.GetConnectionStatus() != ZNet.ConnectionStatus.Connected)
+            { portalReconciliation.Clear(); return; }
+            portalCandidates.Clear();
+            foreach (var record in records.Values)
+                if (!record.shared && !record.dynamic && record.entry?.category == "Portals") portalCandidates.Add(record);
+            if (portalCandidates.Count == 0) return;
+
+            // Read network data independently of selection, detection radius and
+            // line of sight. Uninstantiated but valid portals must also survive.
+            nearbyPortalData.Clear();
+            manager.FindSectorObjects(ZoneSystem.GetZone(player.transform.position), new SimulationDistance(1, 0), nearbyPortalData);
+            bool changed = false;
+            foreach (var record in portalCandidates)
+            {
+                bool ready = Utils.DistanceXZ(record.position, player.transform.position) <= 32f &&
+                    ZNetScene.InActiveArea(record.position, ZNet.instance.GetReferencePosition()) &&
+                    ZNetScene.instance.IsAreaReady(record.position);
+                bool exists = false;
+                if (ready)
+                {
+                    string[] parts = record.id.Split(':');
+                    if (parts.Length != 2 || !long.TryParse(parts[0], out var user) || !uint.TryParse(parts[1], out var id))
+                        ready = false;
+                    else
+                    {
+                        var remembered = manager.GetZDO(new ZDOID(user, id));
+                        exists = remembered != null && remembered.IsValid() && IsPortalData(remembered);
+                        if (!exists)
+                            foreach (var zdo in nearbyPortalData)
+                            {
+                                if (!zdo.IsValid() || (zdo.GetPosition() - record.position).sqrMagnitude >= 1f) continue;
+                                if (IsPortalData(zdo)) { exists = true; break; }
+                            }
+                    }
+                }
+                if (!portalReconciliation.Check(record.id, ready, exists, now)) continue;
+                RemovePin(record); records.Remove(record.id); dirty = changed = true;
+            }
+            if (changed) RefreshPins();
+        }
+        private bool IsPortalData(ZDO zdo) =>
+            (host.Catalog.Prefabs.TryGetValue(zdo.GetPrefab(), out var definition) && definition.category == "Portals") ||
+            Game.instance.PortalPrefabHash.Contains(zdo.GetPrefab());
+
         private bool Visible(MarkerRecord record)
         {
             var entry = record.entry;
-            if (!host.Enabled.Value || entry == null || !entry.Selected.Value) return false;
+            if (!host.Enabled.Value || entry == null) return false;
+            // Selecting a remembered destination explicitly reveals that one local
+            // record, without enabling its whole catalog category or changing filters.
+            if (!record.dynamic && !record.shared && Discoveries.IsTarget(record)) return true;
+            if (!entry.Selected.Value) return false;
             if (record.shared && !host.OtherPlayerPins.Value) return false;
             if (host.SightDetection && !DiscoveryVisibility.ShowSight(!record.dynamic && (entry.KeepVisible?.Value ?? true),
                 record.sightVisible && record.live, record.shared)) return false;
@@ -266,13 +373,16 @@ namespace MapTracker
             if (entry.category == "Ore") return host.ShowMined.Value;
             return host.ShowPickedPlants.Value;
         }
-        private string Name(MarkerRecord record)
+        internal string Name(MarkerRecord record)
         {
+            if (record.nameCache != null) return record.nameCache;
             string label = record.entry.Label;
             if (record.entry.category == "Portals" && !string.IsNullOrWhiteSpace(record.portalTag)) label += ": " + record.portalTag;
-            if (record.collected) return label + " — " + Plugin.Text("Собрано", "Collected");
-            return label;
+            if (record.favorite) label = "[Fav] " + label;
+            return record.nameCache = record.collected ? label + " — " + Plugin.Text("Собрано", "Collected") : label;
         }
+        private string DisplayName(MarkerRecord record) => record.nameGroupMembers != null ? record.nameGroupCaption :
+            Name(record) + (record.group != null ? " ×" + record.group.Count : "");
         internal List<MarkerRecord> OwnDiscoveries()
         {
             return records.Values.Where(r => !r.dynamic && !r.shared && r.entry != null && r.entry.Selected.Value).ToList();
@@ -332,28 +442,33 @@ namespace MapTracker
                 if (entry == null || entry.creature || entry.category == "Dropped items") continue;
                 if (records.TryGetValue(record.id, out var existing) && !existing.shared) continue;
                 if (existing != null) RemovePin(existing);
-                record.entry = entry; record.shared = true; record.sourcePeer = sender;
+                record.entry = entry; record.shared = true; record.sourcePeer = sender; record.favorite = false;
                 record.dynamic = false; records[record.id] = record; dirty = true;
             }
             RefreshPins();
         }
-        private void RefreshPins()
+        private void RefreshPins(bool all = true)
         {
             if (map == null) return;
-            foreach (var record in records.Values)
+            bool changed = false;
+            foreach (var record in all ? (IEnumerable<MarkerRecord>)records.Values : pinChanges)
             {
-                if (!Visible(record)) { RemovePin(record); continue; }
+                if (!records.TryGetValue(record.id, out var current) || current != record) continue;
+                if (!Visible(record)) { changed |= record.pin != null; RemovePin(record); continue; }
                 string name = Name(record);
-                if (record.pin != null && record.pin.m_name != name) RemovePin(record);
+                if (record.pin != null && record.pin.m_name != name) { RemovePin(record); changed = true; }
                 if (record.pin == null)
                 {
                     record.pin = map.AddPin(record.position, Minimap.PinType.Icon3, name, false, record.collected || record.completed);
+                    changed = true;
                     if (!record.entry.creature && record.entry.Icon != null) record.pin.m_icon = record.entry.Icon;
                 }
-                record.pin.m_pos = record.position;
-                record.pin.m_checked = record.collected || record.completed;
+                if (record.pin.m_pos != record.position) { record.pin.m_pos = record.position; changed = true; }
+                bool check = record.collected || record.completed;
+                if (record.pin.m_checked != check) { record.pin.m_checked = check; changed = true; }
             }
-            RequestPinRefresh();
+            pinChanges.Clear();
+            if (changed || all) RequestPinRefresh();
         }
         internal void RequestPinRefresh() { if (Minimap.instance != null) PinUpdateRequired.SetValue(Minimap.instance, true); }
         internal void DetectionChanged()
@@ -366,18 +481,23 @@ namespace MapTracker
         {
             if (map == null || map != Minimap.instance) { ApplySharedPinVisibility(Minimap.instance); return; }
             bool visible = map.m_mode == Minimap.MapMode.Large ? host.LargeMap.Value : host.SmallMap.Value;
+            var area = map.m_mode == Minimap.MapMode.Large ? map.m_mapImageLarge.rectTransform : map.m_mapImageSmall.rectTransform;
+            var canvas = area.GetComponentInParent<Canvas>()?.rootCanvas;
+            var camera = canvas != null && canvas.renderMode != RenderMode.ScreenSpaceOverlay ? canvas.worldCamera : null;
             foreach (var record in records.Values)
             {
                 var pin = record.pin;
                 if (pin?.m_uiElement == null) continue;
-                pin.m_uiElement.gameObject.SetActive(visible && host.Enabled.Value);
+                bool onMap = visible && host.Enabled.Value && (Discoveries.IsTarget(record) || host.MapCategories.Visible(record.entry.category, map.m_mode == Minimap.MapMode.Large)) && MarkerPresentation.OnMap(area, camera, pin.m_uiElement);
+                if (pin.m_uiElement.gameObject.activeSelf != onMap) pin.m_uiElement.gameObject.SetActive(onMap);
+                if (!onMap) { record.nearbyName?.Hide(); continue; }
                 if (pin.m_NamePinData?.PinNameGameObject != null)
                     pin.m_NamePinData.PinNameGameObject.SetActive(visible && host.Enabled.Value && !host.HideLargeMapNames.Value &&
                         map.m_mode == Minimap.MapMode.Large && MapLabelZoom.Visible(map.LargeZoom, map.m_minZoom, map.m_showNamesZoom));
                 if (pin.m_iconElement != null)
                     pin.m_iconElement.color = record.collected || record.completed ? Color.gray :
                         record.visited ? new Color(0.45f, 0.75f, 1f) : record.entry.creature ?
-                        (record.shared ? SharedCreatureColor(record.creatureRelation) : CreatureColor(record.character)) : Color.white;
+                        (record.shared ? SharedCreatureColor(record.creatureRelation) : CreatureColor(record.character)) : record.favorite || Discoveries.IsTarget(record) ? new Color(1f, 0.8f, 0.25f) : Color.white;
                 if (record.entry.creature)
                 {
                     bool large = map.m_mode == Minimap.MapMode.Large;
@@ -395,7 +515,7 @@ namespace MapTracker
                     if (pin.m_iconElement != null) pin.m_iconElement.enabled = !showHead;
                     if (record.creatureIcon == null) record.creatureIcon = new CreatureMapIcon();
                     record.creatureIcon.Update(pin.m_uiElement, sprite, pin.m_icon, size,
-                        record.shared ? SharedCreatureColor(record.creatureRelation) : CreatureColor(record.character), showHead, host.ContrastCreatureIcons.Value);
+                        record.shared ? SharedCreatureColor(record.creatureRelation) : CreatureColor(record.character), showHead, host.ContrastCreatureIcons.Value, host.CreatureOutlineThickness.Value);
                     if (record.stars == null) record.stars = new CreatureStars();
                     int starCount = record.shared ? record.creatureLevel - 1 : record.character != null ? record.character.GetLevel() - 1 : 0;
                     record.stars.Update(pin.m_uiElement, starCount, size);
@@ -410,6 +530,7 @@ namespace MapTracker
                 }
             }
             grouping.Apply(records.Values, map, host, Name);
+            creatureNameGroups.Apply(records.Values, map, host);
             largeLabels.Apply(records.Values, map, host);
             EnforceNameVisibility();
             ApplySharedPinVisibility(map);
@@ -432,6 +553,7 @@ namespace MapTracker
             foreach (var pair in hiddenSharedPins) pair.Value.Hide(pair.Key);
             EnforceNameVisibility();
             UpdateNearbyNames();
+            Discoveries.DrawNavigation(map);
             creatureHover.Apply(records.Values, map, host, Name);
             playerLayer.Apply(Minimap.instance, host.Enabled.Value && !host.Window.Open);
             DiagnoseMinimapNames();
@@ -463,9 +585,11 @@ namespace MapTracker
             foreach (var record in records.Values)
             {
                 if (record.pin == null || (record.nameVisibility == null && record.pin.m_NamePinData?.PinNameGameObject == null)) continue;
+                NameTextStyle.Apply(record.pin.m_NamePinData?.PinNameText,
+                    record.entry?.creature == true ? host.CreatureNameSize.Value : host.ObjectNameSize.Value);
                 if (record.nameVisibility == null) record.nameVisibility = new NativeNameVisibility();
                 record.nameVisibility.Apply(record.pin.m_NamePinData?.PinNameGameObject,
-                    namesAllowed && record.pin.m_uiElement != null && record.pin.m_uiElement.gameObject.activeInHierarchy);
+                    namesAllowed && record.largeNameShown && record.pin.m_uiElement != null && record.pin.m_uiElement.gameObject.activeInHierarchy);
             }
         }
         private void UpdateNearbyNames()
@@ -477,32 +601,45 @@ namespace MapTracker
             nearbyNames.Clear(); nearbyNameBoxes.Clear();
             foreach (var record in records.Values)
             {
-                if (!record.entry.creature) continue;
-                bool show = enabled && record.pin?.m_uiElement != null && record.pin.m_uiElement.gameObject.activeInHierarchy &&
-                    CreatureDisplay.ShowNearbyName(NearbyNameDistance(record, player.transform.position), host.MinimapNameDistance.Value);
+                if (record.entry?.creature != true) continue;
+                bool show = enabled && !record.nameGroupFollower && record.pin?.m_uiElement != null && record.pin.m_uiElement.gameObject.activeInHierarchy &&
+                    (Discoveries.IsTarget(record) || MarkerPresentation.Nearby(record.nearbyNameShown, NearbyNameDistance(record, player.transform.position), host.MinimapNameDistance.Value, host.NameMargin.Value));
+                record.nearbyNameShown = show;
                 if (!show) { record.nearbyName?.Hide(); continue; }
                 if (record.nearbyName == null) record.nearbyName = new CreatureNearbyName();
-                record.nearbyName.Show(record.pin.m_uiElement, map, Name(record) + (record.group != null ? " ×" + record.group.Count : ""));
+                record.nearbyName.Show(record.pin.m_uiElement, map, DisplayName(record), host.CreatureNameSize.Value,
+                    record.nameGroupMembers != null ? (Vector2?)record.nameGroupScreen : null);
                 nearbyNames.Add(record);
             }
-            if (nearbyNames.Count < 2) return;
+            if (nearbyNames.Count == 0) return;
             nearbyNames.Sort((a, b) =>
             {
-                float da = NearbyNameDistance(a, player.transform.position), db = NearbyNameDistance(b, player.transform.position);
-                int order = da.CompareTo(db); return order != 0 ? order : StringComparer.Ordinal.Compare(a.id, b.id);
+                return MarkerPresentation.NameOrder(Discoveries.IsTarget(a), NearbyNameDistance(a, player.transform.position), a.id,
+                    Discoveries.IsTarget(b), NearbyNameDistance(b, player.transform.position), b.id);
             });
             var canvas = map.m_smallRoot.GetComponentInParent<Canvas>()?.rootCanvas;
             Camera camera = canvas != null && canvas.renderMode != RenderMode.ScreenSpaceOverlay ? canvas.worldCamera : null;
-            foreach (var record in nearbyNames) nearbyNameBoxes.Add(record.nearbyName.Bounds(camera));
-            LabelBox[] placed = nearbyPlacement.Place(nearbyNameBoxes, 3 * (canvas != null ? canvas.scaleFactor : 1));
+            nearbyNameBoxes.Add(MarkerPresentation.PlayerArea(map, false, camera, canvas != null ? canvas.scaleFactor : 1));
+            var viewport = MarkerPresentation.MapArea(map.m_mapImageSmall.rectTransform, camera);
+            int accepted = 0;
             for (int i = 0; i < nearbyNames.Count; i++)
-                nearbyNames[i].nearbyName.Move(camera, new Vector2(placed[i].X - nearbyNameBoxes[i].X, placed[i].Y - nearbyNameBoxes[i].Y));
+            {
+                var record = nearbyNames[i]; var bounds = record.nearbyName.Bounds(camera);
+                if (!LabelLayout.Inside(bounds, viewport)) { record.nearbyName.Hide(); continue; }
+                nearbyNames[accepted++] = record; nearbyNameBoxes.Add(bounds);
+            }
+            nearbyNames.RemoveRange(accepted, nearbyNames.Count - accepted);
+            bool[] shown = nearbySelection.Choose(nearbyNameBoxes, 3 * (canvas != null ? canvas.scaleFactor : 1));
+            for (int i = 0; i < nearbyNames.Count; i++)
+                if (!shown[i + 1]) nearbyNames[i].nearbyName.Hide();
         }
-        private static float NearbyNameDistance(MarkerRecord record, Vector3 player)
+        internal static float NearbyNameDistance(MarkerRecord record, Vector3 player)
         {
             float nearest = Utils.DistanceXZ(record.position, player);
             if (record.group != null)
                 foreach (var member in record.group) nearest = Mathf.Min(nearest, Utils.DistanceXZ(member.position, player));
+            if (record.nameGroupMembers != null)
+                foreach (var member in record.nameGroupMembers) nearest = Mathf.Min(nearest, Utils.DistanceXZ(member.position, player));
             return nearest;
         }
         private void ReleaseSharedMasks(bool force)
@@ -532,6 +669,23 @@ namespace MapTracker
                 float reach = record.entry.creature ? Mathf.Max(18, record.pin.m_uiElement.rect.width * 0.5f * iconScale) : 18;
                 if (d <= reach && d < distance) { distance = d; closest = record; }
             }
+            bool waypointHit = Discoveries.IsWaypointTarget && Discoveries.WaypointUI != null &&
+                Vector2.Distance(RectTransformUtility.WorldToScreenPoint(null, Discoveries.WaypointUI.position), pointer) <= 18 * iconScale;
+            bool alt = host.Enabled.Value && (Input.GetKey(KeyCode.LeftAlt) || Input.GetKey(KeyCode.RightAlt));
+            ZNet.PlayerInfo clickedPlayer = default; string playerName = null; float playerDistance = float.MaxValue;
+            bool playerHit = alt && !waypointHit && PlayerNavigation.TryPick(map, pointer, out clickedPlayer, out playerName, out playerDistance) && playerDistance <= distance;
+            var targetAction = MapTargetGesture.Resolve(alt, toggle,
+                closest != null || waypointHit || playerHit, waypointHit || (playerHit ? Discoveries.IsPlayerTarget(clickedPlayer) : closest != null && Discoveries.IsTarget(closest)), !playerHit && closest?.group != null && !grouping.IsExpanded(closest));
+            if (targetAction != MapTargetAction.None)
+            {
+                if (targetAction == MapTargetAction.Expand) grouping.Toggle(closest);
+                else if (targetAction == MapTargetAction.Select)
+                { grouping.Close(); if (playerHit) Discoveries.SelectPlayer(clickedPlayer, playerName); else Discoveries.Select(closest); }
+                else if (targetAction == MapTargetAction.Clear) { grouping.Close(); Discoveries.ClearTarget(); }
+                else if (targetAction == MapTargetAction.Place) { grouping.Close(); Discoveries.SelectPoint(map, pointer); }
+                RequestPinRefresh(); return false;
+            }
+            if (waypointHit) return false; // Temporary navigation pins are owned by MapTracker.
             if (closest == null) { if (toggle) { grouping.Close(); RequestPinRefresh(); } return true; }
             if (toggle && (Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl)))
             {
@@ -590,6 +744,8 @@ namespace MapTracker
                         record.entry = host.Catalog.GetLegacyDungeon(record.type.Substring("legacy:".Length));
                     records[record.id] = record;
                 }
+                dirty |= MarkerLifetime.RemoveDestroyedPortals(records, RemovePin);
+                dirty |= DungeonDiscoveries.RemoveDuplicates(records, RemovePin);
             }
             catch (Exception e) { host.Report("Saved markers could not be loaded; original file retained", e); savePath = null; }
         }
@@ -598,8 +754,10 @@ namespace MapTracker
             foreach (var record in records.Values)
             {
                 var entry = host.Catalog.GetSavedDefinition(record.type);
-                if (entry != null && entry != record.entry) { RemovePin(record); record.entry = entry; }
+                if (entry != null && entry != record.entry) { RemovePin(record); record.entry = entry; record.nameCache = null; }
             }
+            dirty |= MarkerLifetime.RemoveDestroyedPortals(records, RemovePin);
+            dirty |= DungeonDiscoveries.RemoveDuplicates(records, RemovePin);
         }
         private bool Save()
         {
@@ -629,10 +787,13 @@ namespace MapTracker
         private void RemovePins() { foreach (var record in records.Values) RemovePin(record); }
         private void Reset()
         {
-            Save(); RemovePins(); records.Clear(); snapshot = null; pendingEntrance = null;
+            Save(); RemovePins(); records.Clear(); pinChanges.Clear(); snapshotBuffer.Clear(); snapshot = null; pendingEntrance = null;
+            Discoveries.Reset();
+            creatureNameGroups.Reset();
             grouping.Dispose(); creatureHover.Dispose();
             if (manager != null) manager.m_onZDODestroyed -= Destroyed;
             manager = null; loaded = false; dirty = false; map = null;
+            portalReconciliation.Clear(); portalCandidates.Clear(); nearbyPortalData.Clear(); nextPortalCheck = 0;
             definitionsResolved = false; nextEarlyRefresh = 0;
             ResetNameDiagnostics();
         }

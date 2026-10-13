@@ -192,12 +192,14 @@ namespace MapTracker
             try
             {
                 string key = entry.key.Replace('=', '_').Replace('[', '_').Replace(']', '_');
+                host.MapCategories.Register(entry.category);
                 entry.Selected = host.Config.Bind("Types", key,
                     BuiltInFilterPresets.DefaultSelected(entry),
                     new ConfigDescription(entry.prefab, null, new ConfigurationManagerAttributes { Browsable = false }));
                 if (!entry.creature && entry.category != "Dropped items")
                 {
-                    bool keep = DiscoveryVisibility.KeepByDefault(entry.dungeon, entry.category);
+                    bool keep = DefaultSettings.Value("Keep discovered markers", key,
+                        DiscoveryVisibility.KeepByDefault(entry.dungeon, entry.category));
                     entry.KeepVisible = host.Config.Bind("Keep discovered markers", key, keep,
                         new ConfigDescription("Keep this type visible after leaving the client-loaded detection area. Turning this off hides remembered markers outside that area without deleting discoveries.",
                             null, new ConfigurationManagerAttributes { Browsable = false }));
@@ -215,7 +217,8 @@ namespace MapTracker
                 foreach (var entry in Entries)
                 {
                     entry.Selected.Value = BuiltInFilterPresets.DefaultSelected(entry);
-                    if (entry.KeepVisible != null) entry.KeepVisible.Value = DiscoveryVisibility.KeepByDefault(entry.dungeon, entry.category);
+                    if (entry.KeepVisible != null) entry.KeepVisible.Value = DefaultSettings.Value("Keep discovered markers", entry.KeepVisible.Definition.Key,
+                        DiscoveryVisibility.KeepByDefault(entry.dungeon, entry.category));
                 }
                 host.Hostile.Value = true; host.Friendly.Value = false; host.Animals.Value = false; host.Tamed.Value = false;
                 host.PresetRevision.Value = 1;

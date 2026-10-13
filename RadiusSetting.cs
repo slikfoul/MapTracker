@@ -24,10 +24,10 @@ namespace MapTracker
                 var previous = ConfigSections.Bind(config, "General", "Detection", "Detection radius", 0f, new ConfigDescription("Radius before integer conversion."));
                 int initial = revision.Value >= 2 && previous.Value == LineOfSight ? LineOfSight : Convert(previous.Value, revision.Value > 0);
                 config.Remove(previous.Definition);
-                var result = config.Bind("Detection", "Detection radius", Unlimited, new ConfigDescription(
+                var result = config.Bind("Detection", "Detection radius", DefaultSettings.Value("Detection", "Detection radius", Unlimited), new ConfigDescription(
                     "Leftmost position: discover objects in the camera view with unobstructed sight from the character and camera, including mist checks. Other positions are whole meters; rightmost infinity uses all client data. Remembered local discoveries remain visible when Keep discovered is enabled.",
                     new AcceptableValueRange<int>(Minimum, Unlimited), new ConfigurationManagerAttributes
-                    { DispName = "Радиус обнаружения, м", CustomDrawer = drawer }));
+                    { DispName = "Discovery radius (m)", CustomDrawer = drawer }));
                 result.Value = initial;
                 revision.Value = 2;
                 return result;

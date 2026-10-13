@@ -13,7 +13,6 @@ namespace MapTracker
         {
             if (text != null) text.gameObject.SetActive(false);
             if (map == null || map.m_mode != Minimap.MapMode.Large || !host.Enabled.Value || !host.LargeMap.Value || host.Window.Open) return;
-            if (!host.HideLargeMapNames.Value && MapLabelZoom.Visible(map.LargeZoom, map.m_minZoom, map.m_showNamesZoom)) return;
             var canvas = map.m_largeRoot.GetComponentInParent<Canvas>()?.rootCanvas;
             Camera camera = canvas != null && canvas.renderMode != RenderMode.ScreenSpaceOverlay ? canvas.worldCamera : null;
             Vector2 pointer = ZInput.pointerPosition;
@@ -21,14 +20,15 @@ namespace MapTracker
             MarkerRecord closest = null; float best = float.MaxValue;
             foreach (var record in records)
             {
-                if (record.entry?.creature != true || record.pin?.m_uiElement == null || !record.pin.m_uiElement.gameObject.activeInHierarchy) continue;
+                if (record.entry == null || record.pin?.m_uiElement == null || !record.pin.m_uiElement.gameObject.activeInHierarchy) continue;
                 float distance = Vector2.Distance(pointer, RectTransformUtility.WorldToScreenPoint(camera, record.pin.m_uiElement.position));
                 float reach = Mathf.Max(16, Mathf.Max(record.pin.m_uiElement.rect.width, record.pin.m_uiElement.rect.height) * 0.5f) *
                     (canvas != null ? canvas.scaleFactor : 1);
                 if (distance <= reach && distance < best) { best = distance; closest = record; }
             }
             if (closest == null) return;
-            if (text != null && text.transform.parent != map.m_largeRoot.transform) Object.Destroy(text.gameObject);
+            if (closest.largeNameShown && closest.pin.m_NamePinData?.PinNameGameObject?.activeInHierarchy == true) return;
+            if (text != null && text.transform.parent != map.m_largeRoot.transform) { Object.Destroy(text.gameObject); text = null; }
             if (text == null)
             {
                 text = NativeMapText.Create("MapTrackerCreatureHoverName", map.m_largeRoot.transform, map);
@@ -39,7 +39,10 @@ namespace MapTracker
                 text.rectTransform.pivot = new Vector2(0.5f, 0);
                 text.rectTransform.sizeDelta = new Vector2(280, 24);
             }
-            text.text = name(closest) + (closest.group != null ? " ×" + closest.group.Count : "");
+            NameTextStyle.Apply(text, closest.entry.creature ? host.CreatureNameSize.Value : host.ObjectNameSize.Value, true);
+            string caption = name(closest) + (closest.group != null ? " ×" + closest.group.Count : "");
+            if (text.text != caption) text.text = caption;
+            text.rectTransform.sizeDelta = new Vector2(280, Mathf.Max(24, text.GetPreferredValues(caption).y + 4));
             var parent = map.m_largeRoot.transform as RectTransform;
             Vector2 screen = RectTransformUtility.WorldToScreenPoint(camera, closest.pin.m_uiElement.position);
             screen.y += (closest.pin.m_uiElement.rect.height * 0.5f + 5) * (canvas != null ? canvas.scaleFactor : 1);

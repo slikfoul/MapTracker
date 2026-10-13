@@ -20,9 +20,12 @@ namespace MapTracker
                 text = NativeMapText.Create("MapTrackerGroupCount", parent, map);
                 text.fontSize = 16; text.color = new Color(1, 0.83f, 0.25f); text.alignment = TextAlignmentOptions.Midline;
                 text.raycastTarget = false; text.richText = false;
-                text.rectTransform.anchorMin = text.rectTransform.anchorMax = new Vector2(1, 1);
-                text.rectTransform.sizeDelta = new Vector2(35, 20);
+                text.textWrappingMode = TextWrappingModes.NoWrap; text.overflowMode = TextOverflowModes.Overflow;
+                text.rectTransform.anchorMin = text.rectTransform.anchorMax = text.rectTransform.pivot = new Vector2(0.5f, 0.5f);
+                text.rectTransform.anchoredPosition = Vector2.zero;
+                text.rectTransform.sizeDelta = new Vector2(60, 24);
             }
+            text.transform.SetAsLastSibling(); text.fontSize = count >= 1000 ? 13 : 16;
             text.gameObject.SetActive(true); text.text = count.ToString();
         }
     }
@@ -36,14 +39,17 @@ namespace MapTracker
         private readonly HashSet<MarkerRecord> visible = new HashSet<MarkerRecord>();
         private List<List<MarkerRecord>> cachedGroups = new List<List<MarkerRecord>>();
         private float nextBuild, previousZoom;
+        private float previousScale;
         private int previousCount = -1, previousMinimum, previousDistance;
         private Minimap.MapMode previousMode;
         private string selectedGroup;
+        internal void Invalidate() { nextBuild = 0; previousCount = -1; }
         internal void Toggle(MarkerRecord representative)
         {
             selectedGroup = selectedGroup == representative.id ? null : representative.id;
         }
         internal void Close() { selectedGroup = null; if (tooltip != null) tooltip.SetActive(false); }
+        internal bool IsExpanded(MarkerRecord record) => selectedGroup == record.id;
         internal void Apply(IEnumerable<MarkerRecord> records, Minimap map, Plugin host, Func<MarkerRecord, string> name)
         {
             eligible.Clear(); visible.Clear();
@@ -54,35 +60,42 @@ namespace MapTracker
                 record.group = null; record.badge?.Hide();
                 var pin = record.pin;
                 if (pin?.m_uiElement == null || !pin.m_uiElement.gameObject.activeInHierarchy) continue;
-                if (pin.m_NamePinData?.PinNameText != null)
-                {
-                    string label = name(record);
-                    if (pin.m_NamePinData.PinNameText.text != label) pin.m_NamePinData.PinNameText.text = label;
-                }
-                if (!host.GroupMarkers.Value || (record.entry.creature && !host.GroupCreatures.Value)) continue;
+                if (record.favorite || host.Tracking.Discoveries.IsTarget(record) || !host.GroupMarkers.Value || (record.entry.creature && !host.GroupCreatures.Value)) continue;
                 if (BuiltInFilterPresets.IsPlantMarker(record.entry) && !host.GroupPlants.Value) continue;
                 eligible.Add(record);
                 visible.Add(record);
             }
-            if (!host.GroupMarkers.Value || eligible.Count < host.GroupThreshold.Value) { previousCount = -1; return; }
+            if (!host.GroupMarkers.Value || eligible.Count < host.GroupThreshold.Value)
+            { previousCount = -1; UpdateNames(records, name); return; }
             float scale = map.m_largeRoot.GetComponentInParent<Canvas>()?.rootCanvas.scaleFactor ?? 1;
+            var canvas = map.m_largeRoot.GetComponentInParent<Canvas>()?.rootCanvas;
+            var camera = canvas != null && canvas.renderMode != RenderMode.ScreenSpaceOverlay ? canvas.worldCamera : null;
             float zoom = map.m_mode == Minimap.MapMode.Large ? map.LargeZoom : map.SmallZoom;
             if (Time.realtimeSinceStartup >= nextBuild || previousCount != eligible.Count || previousMode != map.m_mode ||
-                previousZoom != zoom || previousMinimum != host.GroupThreshold.Value || previousDistance != host.GroupDistance.Value)
+                previousZoom != zoom || previousScale != scale || previousMinimum != host.GroupThreshold.Value || previousDistance != host.GroupDistance.Value)
             {
                 points.Clear();
                 foreach (var record in eligible)
                 {
-                    Vector2 position = RectTransformUtility.WorldToScreenPoint(null, record.pin.m_uiElement.position);
+                    Vector2 position = RectTransformUtility.WorldToScreenPoint(camera, record.pin.m_uiElement.position);
                     string kind = record.entry.category == "Portals" ? "Portals" : record.type;
                     kind += ":" + record.collected + ":" + record.visited + ":" + record.completed;
                     if (record.entry.creature) kind += ":" + (record.shared ? record.creatureLevel : record.character != null ? record.character.GetLevel() : 1) + ":" + record.pin.m_iconElement.color;
-                    points.Add(new ClusterPoint { X = position.x, Y = position.y, Kind = kind });
+                    var rect = record.pin.m_uiElement;
+                    Vector2 min = RectTransformUtility.WorldToScreenPoint(camera, rect.TransformPoint(rect.rect.min));
+                    Vector2 max = RectTransformUtility.WorldToScreenPoint(camera, rect.TransformPoint(rect.rect.max));
+                    bool icons = map.m_mode == Minimap.MapMode.Large ? host.CreatureIcons.Value : host.MinimapCreatureIcons.Value;
+                    float outline = record.entry.creature && icons && host.ContrastCreatureIcons.Value &&
+                        (map.m_mode != Minimap.MapMode.Large || MapLabelZoom.Visible(map.LargeZoom, map.m_minZoom, map.m_showNamesZoom))
+                        ? host.CreatureOutlineThickness.Value * scale : 0;
+                    points.Add(new ClusterPoint { X = position.x, Y = position.y, Kind = kind, WorldX = record.pin.m_pos.x, WorldZ = record.pin.m_pos.z,
+                        HalfWidth = Mathf.Abs(max.x - min.x) * 0.5f + outline, HalfHeight = Mathf.Abs(max.y - min.y) * 0.5f + outline });
                 }
-                cachedGroups = ClusterMath.Build(points, host.GroupDistance.Value * Mathf.Max(scale, 0.25f), host.GroupThreshold.Value)
+                cachedGroups = ClusterMath.BuildOverlapping(points, 3 * Mathf.Max(scale, 0.25f), host.GroupThreshold.Value, host.GroupDistance.Value)
                     .Select(indices => indices.Select(i => eligible[i]).ToList()).ToList();
                 nextBuild = Time.realtimeSinceStartup + 0.2f;
                 previousCount = eligible.Count; previousMode = map.m_mode; previousZoom = zoom; previousMinimum = host.GroupThreshold.Value;
+                previousScale = scale;
                 previousDistance = host.GroupDistance.Value;
             }
             bool selectionVisible = false;
@@ -90,21 +103,19 @@ namespace MapTracker
             {
                 if (members.Any(member => !visible.Contains(member))) { nextBuild = 0; continue; }
                 MarkerRecord representative = members[0];
-                Vector2 center = Vector2.zero;
-                foreach (var member in members) center += member.pin.m_uiElement.anchoredPosition;
-                center /= members.Count;
+                // Use a real member's location. Never move a plant group into an empty midpoint.
+                Vector2 center = representative.pin.m_uiElement.anchoredPosition;
                 representative.group = members;
                 representative.pin.m_uiElement.anchoredPosition = center;
                 if (representative.pin.m_NamePinData != null)
                 {
                     if (representative.pin.m_NamePinData.PinNameRectTransform != null) representative.pin.m_NamePinData.PinNameRectTransform.anchoredPosition = center;
-                    if (representative.pin.m_NamePinData.PinNameText != null)
-                        representative.pin.m_NamePinData.PinNameText.text = representative.entry.Label + " ×" + members.Count;
                 }
                 if (representative.badge == null) representative.badge = new ClusterBadge();
                 representative.badge.Show(representative.pin.m_uiElement, map, members.Count);
                 foreach (var member in members.Skip(1))
                 {
+                    if (selectedGroup == representative.id && map.m_mode == Minimap.MapMode.Large) continue;
                     member.pin.m_uiElement.gameObject.SetActive(false);
                     if (member.pin.m_NamePinData?.PinNameGameObject != null) member.pin.m_NamePinData.PinNameGameObject.SetActive(false);
                 }
@@ -116,6 +127,17 @@ namespace MapTracker
                 }
             }
             if (!selectionVisible) selectedGroup = null;
+            UpdateNames(records, name);
+        }
+        private static void UpdateNames(IEnumerable<MarkerRecord> records, Func<MarkerRecord, string> name)
+        {
+            foreach (var record in records)
+            {
+                var text = record.pin?.m_NamePinData?.PinNameText;
+                if (text == null || record.pin.m_uiElement == null || !record.pin.m_uiElement.gameObject.activeInHierarchy) continue;
+                string label = name(record) + (record.group != null ? " ×" + record.group.Count : "");
+                if (text.text != label) text.text = label;
+            }
         }
         private void ShowTooltip(Minimap map, List<MarkerRecord> members, Vector2 screen, Func<MarkerRecord, string> name)
         {

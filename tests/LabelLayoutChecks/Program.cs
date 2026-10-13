@@ -79,3 +79,37 @@ Check(reusedLayout.Place(translatedInputs, 3).Zip(movedExpected).All(p => p.Firs
 var scaledExpected = LayoutReference.Place(translatedInputs, 5);
 Check(reusedLayout.Place(translatedInputs, 5).Zip(scaledExpected).All(p => p.First.X == p.Second.X && p.First.Y == p.Second.Y),
     "changing the readability gap invalidates cached placement");
+var protectedInput = new List<LabelBox> { new LabelBox(90, 90, 40, 40), new LabelBox(90, 90, 100, 20), new LabelBox(100, 100, 120, 20) };
+var protectedResult = new LabelLayout.Placement().Place(protectedInput, 3);
+bool Intersects(LabelBox a, LabelBox b) => a.X < b.X + b.Width && a.X + a.Width > b.X && a.Y < b.Y + b.Height && a.Y + a.Height > b.Y;
+Check(!Intersects(protectedResult[0], protectedResult[1]) && !Intersects(protectedResult[0], protectedResult[2]),
+    "the reserved character marker area stays clear of nearby names");
+var anchoredSelection = new LabelLayout.Selection();
+var anchoredInput = new[] { new LabelBox(90, 90, 40, 40), new LabelBox(90, 90, 100, 20), new LabelBox(200, 100, 120, 20) };
+var anchoredOriginal = anchoredInput.ToArray();
+Check(anchoredSelection.Choose(anchoredInput, 3).SequenceEqual(new[] { true, false, true }) && anchoredInput.SequenceEqual(anchoredOriginal),
+    "crowded names are suppressed at their own markers without moving text or covering the character arrow");
+Check(anchoredSelection.Choose(anchoredInput.Select(b => new LabelBox(b.X + 20, b.Y - 40, b.Width, b.Height)).ToArray(), 3).SequenceEqual(new[] { true, false, true }),
+    "panning retains cached anchored name choices");
+anchoredInput[1].X = 450;
+Check(anchoredSelection.Choose(anchoredInput, 3).All(v => v), "moving a crowded marker into free space reveals its anchored name");
+anchoredInput[1].X = 250; anchoredInput[2].Width = 300;
+Check(anchoredSelection.Choose(anchoredInput, 3).SequenceEqual(new[] { true, true, false }),
+    "larger fonts invalidate anchored choices and hide collisions rather than pushing names away");
+Check(LabelLayout.Inside(new LabelBox(10, 10, 40, 20), new LabelBox(0, 0, 100, 100)) &&
+    !LabelLayout.Inside(new LabelBox(80, 10, 40, 20), new LabelBox(0, 0, 100, 100)),
+    "names that cross the map edge remain available on hover rather than spilling outside it");
+for (int trial = 0; trial < 60; trial++)
+{
+    var inputs = Enumerable.Range(0, 120).Select(_ => new LabelBox(random.Next(-300, 300), random.Next(-250, 250), random.Next(10, 180), random.Next(12, 40))).ToArray();
+    bool[] expected = new bool[inputs.Length];
+    for (int i = 0; i < inputs.Length; i++)
+    {
+        expected[i] = true;
+        for (int j = 0; j < i; j++)
+            if (expected[j] && inputs[i].X < inputs[j].X + inputs[j].Width + 3 && inputs[i].X + inputs[i].Width + 3 > inputs[j].X &&
+                inputs[i].Y < inputs[j].Y + inputs[j].Height + 3 && inputs[i].Y + inputs[i].Height + 3 > inputs[j].Y)
+            { expected[i] = false; break; }
+    }
+    Check(anchoredSelection.Choose(inputs, 3).SequenceEqual(expected), "spatial anchored selection matches independent collision checks " + trial);
+}

@@ -4,7 +4,7 @@
     <AssemblyName>MapTracker</AssemblyName>
     <RootNamespace>MapTracker</RootNamespace>
     <LangVersion>latest</LangVersion>
-    <Version>0.1.23</Version>
+    <Version>0.7.0</Version>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
     <CopyLocalDependenciesWhenTargetingNetFx>false</CopyLocalDependenciesWhenTargetingNetFx>
@@ -14,6 +14,7 @@
     <BepInExCore>$(ModProfile)\BepInEx\core</BepInExCore>
   </PropertyGroup>
   <ItemGroup>
+    <EmbeddedResource Include="assets/defaults/settings.json" LogicalName="MapTracker.DefaultSettings.json" />
     <EmbeddedResource Include="assets/creature-icons/*.png" LogicalName="MapTracker.CreatureIcons.%(Filename)%(Extension)" />
     <Compile Remove="tests/**/*.cs" />
     <Compile Remove="migration/**/*.cs" />

@@ -1,0 +1,53 @@
+{
+  "General": {
+    "Enabled": "true"
+  },
+  "Maps": {
+    "Large map": "true",
+    "Minimap": "true"
+  },
+  "Names": {
+    "Hide large map names": "false",
+    "Hide minimap names": "true",
+    "Minimap name distance": "70"
+  },
+  "Icons": {
+    "Contrast creature icons": "true",
+    "Creature icons": "true",
+    "Large map creature icon size": "30",
+    "Minimap creature icon size": "19",
+    "Minimap creature icons": "false"
+  },
+  "Detection": {
+    "Detection radius": "301"
+  },
+  "Grouping": {
+    "Group creatures": "false",
+    "Group distance": "400",
+    "Group markers": "true",
+    "Group plants": "false",
+    "Group threshold": "2"
+  },
+  "Creatures": {
+    "Animals": "false",
+    "Friendly": "false",
+    "Hostile": "true",
+    "Tamed": "false"
+  },
+  "Completed": {
+    "Dungeons": "true",
+    "Ore": "false",
+    "Plants": "false"
+  },
+  "Sharing": {
+    "Other player pins": "false",
+    "Share discoveries": "false"
+  },
+  "Types": {
+    "prefab:giant_brain": "true",
+    "prefab:giant_brain_frac": "false",
+    "prefab:giant_ribs_frac": "false",
+    "prefab:giant_skull_frac": "false"
+  },
+  "Keep discovered markers": {}
+}
