@@ -1,6 +1,6 @@
 # MapTracker
 
-Client-side Valheim map tracker for BepInEx and Harmony. Development preview **0.7.1**.
+Client-side Valheim map tracker for BepInEx and Harmony. Development preview **0.11.0**.
 
 MapTracker displays discovered objects and creatures on the native minimap and large map. It does not require Jotunn or a server plugin. Current builds are development previews; multiplayer sharing and performance on crowded maps still need in-game testing.
 
@@ -13,23 +13,22 @@ MapTracker displays discovered objects and creatures on the native minimap and l
 - Independent name visibility, minimap creature name distance and zoom-based large-map labels. Names stay anchored to their markers; the selected destination and nearby creatures have priority when labels collide. Large-map names are independent of character distance, and hover reveals suppressed names. Creature and object font sizes can be adjusted separately.
 - Optional radius-based grouping of same-species names into a centered caption and count, independent of icon grouping. Marker positions remain unchanged and selected destinations keep their own names.
 - Discovery radius: line of sight, whole meters, or the maximum client-loaded area. Sight detection checks the camera, obstacles and the game's mist visibility API, including demister effects.
-- Optional grouping, with separate plant and creature switches. Group distance uses screen pixels, so zooming out covers more world space. Disable plant grouping for exact plant locations.
+- Optional grouping, with separate plant and creature switches. Icons group when they overlap on screen and split as zoom creates room, with a configurable world span limit. Disable plant grouping for exact plant locations.
 - Built-in Default, Gathering, Exploration and Household presets, plus named custom presets. Presets can be saved, loaded and deleted, including built-in presets.
 - Optional sharing between MapTracker clients, disabled by default. Received discoveries are not forwarded. MapTracker markers are separate from native cartography-table pins.
 - Collected plants, depleted ore and manually completed dungeons have separate visibility settings. Actual observed plant regrowth restores a marker.
 - Original transparent head icons for bats, hens, chicks and young boars, wolves, asksvins and loxes, embedded in the DLL.
 - Dense-map label placement uses spatial lookup, reusable buffers and cached layouts. Individually moving markers and scale changes invalidate the cache. FPS improvements still need in-game verification.
-- Discovery browser searches remembered local places, including disabled catalog types, by name, type key and portal tag. Favorites survive restarts and are highlighted on the map.
 - Select a navigation destination to show straight-line distance and world compass direction below the minimap or in the corner of the large map. Locate it on the large map without enabling its entire category. Targets remain independent of grouping and can be cleared.
 - Optional navigation arrow at the top of the gameplay HUD, pointing toward the destination relative to the camera, with its name and distance. Toggle **Navigation → Show navigation arrow** independently of the map destination.
-- Independent category visibility on each map, full presentation presets and a next-preset button.
-- Groups have full diameter limits in screen pixels and world meters, stay anchored to a real member, and reveal exact member positions on click. Creature names use distance hysteresis; labels reserve space around the character arrow.
+- Independent category visibility on each map and presets limited to the per-type display, retention and notification choices in the filter window.
+- Groups stay anchored to a real member and reveal exact member positions on click, with detail lists placed clear of the expanded icons and labels. Creature names use distance hysteresis; labels reserve space around the character arrow.
 - Optional new-dungeon and per-type discovery notifications, disabled by default. Saved discoveries and rebinding existing entrances do not trigger notifications.
 - A configurable scan budget, incremental marker updates, pooled nearby labels and cached visibility geometry.
 
 ## Initial settings
 
-New profiles start with minimap dots and hidden minimap creature names, large-map trophy icons with names, silhouette outlines, a 19 px minimap icon size and 30 px large-map icon size. Minimap name distance is 70 m when names are enabled. Discovery uses all client-loaded data. General grouping is enabled with a minimum of 2 and 36 px distance; plant and creature grouping are disabled. Only hostile creature relations are enabled, sharing and other-player pins are disabled, and only completed dungeons remain visible. Portals and dungeons are remembered. Existing saved choices are preserved. Initial values are embedded in `assets/defaults/settings.json`.
+New profiles start with minimap dots and hidden minimap creature names, large-map trophy icons with names, silhouette outlines, a 19 px minimap icon size and 30 px large-map icon size. Minimap name distance is 70 m when names are enabled. Discovery uses all client-loaded data. General grouping is enabled with a minimum of 2 and a 400 m maximum world span; plant and creature icon grouping are disabled. Same-species name grouping is enabled with a 15 m radius. Only hostile creature relations are enabled; discovery sharing, automatic creature transmission and other-player pins are disabled. Completed dungeons remain visible, while collected plants and depleted ore are hidden. Portals and dungeons are remembered. Existing saved choices are preserved. Initial values come from the configuration bindings and `assets/defaults/settings.json`.
 
 ## Requirements
 
@@ -63,9 +62,9 @@ Builds do not deploy automatically.
 
 Open the filters through the gear button on the large map, the Configuration Manager **Filters** button, or the `maptracker` console command after loading a world.
 
-Settings are grouped into General, Maps, Names, Icons, Detection, Grouping, Sharing, Creatures, Completed and Tools.
+Settings are grouped into General, Minimap, Large map, Names, Icons, Detection, Grouping, Sharing, Creatures, Completed, Performance, Notifications, Navigation and Tools.
 
-For **dots on the minimap and heads on the large map**, disable the minimap creature icon checkbox and enable the large-map creature icon checkbox in **Icons**. Names, stars and grouping retain their own settings.
+For **dots on the minimap and heads on the large map**, disable the creature icon checkbox in **Minimap** and enable it in **Large map**. Names, stars and grouping retain their own settings.
 
 Runtime files inside the BepInEx profile:
 
@@ -75,21 +74,32 @@ Runtime files inside the BepInEx profile:
 
 Saved discoveries are separate from native/manual pins. Disabling display does not delete saved discoveries.
 
-## Discoveries and navigation
+## Navigation
 
-Alt + left-click an object or any location on the large map to select a navigation target. Alt-click the selected target again to clear it. Empty map space creates a temporary waypoint, outside saved discoveries. Collapsed groups reveal their members first. Navigation stops within 5 meters of the goal; interiors, teleportation and wrong floors do not trigger arrival. F10 cancels navigation, configurable under Navigation. Alt gestures consume native double/right-click behavior and do not change dungeon completion states. Mod UI and configuration labels use English; player portal tags are preserved.
+Alt + left-click on the large map to navigate to a MapTracker marker, public player or any map location. Empty map space creates a temporary destination marker. Repeat the gesture on the selected target to stop navigation. Right-click a target to cancel it. Change the selection button or keyboard combination in Navigation → Select navigation key; Alt + left-click is the default. Keyboard bindings work while pointing at the large map. Ordinary middle-click keeps the game's ping, and scrolling keeps map zoom. Alt + middle-click is reserved for shared navigation. Dungeon completion states remain unchanged.
 
-Open **Discoveries** in the filter window. Search names or portal tags, use **Fav** to toggle a favorite, **Map** to center the large map and select the destination, **Target** to navigate without moving the map, and **Notify** to enable discovery notifications for that type. The list contains remembered local static locations, independent of the current catalog filter; it does not reveal undiscovered world objects. **Favorites only** narrows the list. **Clear target** ends navigation.
 
-Use **Next preset** to cycle undeleted built-in and custom presets, and **Clear target** in Discoveries to stop navigation. Newly saved custom presets include Minimap, Large map, Names, Icons, Detection, Grouping and internal category visibility settings. Legacy presentation presets remain readable after section changes. Sharing permissions and plugin enablement are never changed by presentation presets. Favorites and selected destinations stay individual instead of disappearing inside groups.
+Use **Preset** in the map filter window to save, load or delete built-in and custom filter sets. Presets store only per-type Show object, Keep discovered and Notify choices. Existing presets retain their filter selections and ignore old configurator preferences. Sizes, grouping, radius, relationships and other configuration manager values stay unchanged.
 
 Use the searchable filters to select object categories and types; category rows are hidden from the configuration manager while saved visibility choices remain intact. Per-map visibility, icons, sizes and names are organized under **Minimap** and **Large map**; shared font sizes and name grouping remain under **Names**, and the solid black silhouette outline remains under **Icons**. General grouping, plant grouping and creature grouping still have their existing switches. Groups form only when displayed icons overlap or nearly touch and split automatically as zoom creates room. **Maximum group span (m)** limits the distance between the furthest members, in the range **8–800**, default **400**; previously saved values are retained. It never forces separated screen icons into a group. Counts appear at the center of the representative icon. Click a large-map group to show its members at real positions; click again or an empty area to close it. A selected navigation target is displayed individually.
 
-Enable **Names → Group creature names** for a single caption such as **Leech ×3** at the center of nearby same-species markers on either map. **Creature name group radius (m)** controls this separately from discovery and icon grouping, default **15 m**. The setting is off by default; it does not override name visibility switches or minimap name distance.
+**Names → Group creature names** is enabled by default for a single caption such as **Leech ×3** at the center of nearby same-species markers on either map. **Creature name group radius (m)** controls this separately from discovery and icon grouping, default **15 m**. Existing saved choices are preserved; Reset applies the new defaults. The setting does not override name visibility switches or minimap name distance.
 
-Alt-click a public player marker on the large map to navigate to that player. The destination follows the current public position, including players with matching names. Tracking stops on arrival, cancellation, disconnection or when the player stops sharing their map position. It is temporary and does not create saved discoveries or duplicate player pins.
+Alt + left-click a public player marker on the large map to navigate to that player. The destination follows the current public position, including players with matching names. Tracking stops on arrival, cancellation, disconnection or when the player stops sharing their map position. It is temporary and does not create saved discoveries or duplicate player pins.
 
-**Notifications** are opt-in: enable new dungeons, use the **Notify** column in the object catalog before your first discovery, or use **Notify** in Discoveries for particular static types. Messages are spaced at least four seconds apart. Notifications require actual client discovery within the chosen radius or sight mode. Previously saved places, dynamic creatures, loose dropped items and already collected resources do not notify.
+**Notifications** are opt-in: enable new dungeons, use the **Notify** column in the object catalog before your first discovery, for particular static types. Messages are spaced at least four seconds apart. Notifications require actual client discovery within the chosen radius or sight mode. Previously saved places, dynamic creatures, loose dropped items and already collected resources do not notify.
+
+**Sharing → Share discoveries** sends static discoveries to other MapTracker users in the same world. Received dungeons, ore, roots, plants and other static objects merge into the normal discovery set. Repeated packets and discoveries of the same object do not create another marker; nearby distinct objects remain separate. Local observations and local dungeon progress take priority.
+
+Enable **Sharing → Other player pins** to display received discoveries, then use your own **Show object** filters. **Keep discovered** retains static discoveries after the sender leaves or you restart. Fresh observations from a teammate can appear outside your detection radius, including another map zone. Receipt and storage do not depend on whether a type is currently displayed. Sending observes your detection distance or sight mode independently of display filters.
+
+**Sharing → Share creature positions** is disabled by default and requires Share discoveries. Enable it to transmit live creature positions, levels and relationships. Receiving uses Other player pins and your own creature filters. Creatures share network identity, so two players seeing the same creature produce one marker, with local observations taking priority. Moving creatures update at most twice per second; unchanged creatures use a periodic heartbeat. Live positions expire after updates stop and are not stored as permanent creature sightings. Received data is never automatically forwarded. This checkbox does not disable explicit shared navigation.
+
+Expanded group lists prefer space to the left of their members and avoid their icons and visible names. Near a map edge the list uses another free area; if none fits, it remains hidden while the expanded markers stay visible.
+
+With **Sharing → Share discoveries** enabled, **Alt + middle-click** any map location or object to share a navigation target. Both sender and recipients must enable Share discoveries and have shared navigation support. Personal navigation stays active. The shared HUD arrow is blue; when both destinations exist, the arrows sit side by side at the top center. Existing object markers are highlighted without a duplicate waypoint. Empty locations or objects not yet available to a recipient use a shared waypoint. Personal targets are orange, shared targets blue, and a target selected both ways uses their blended color. Only one shared destination is active at a time. Available object positions update the shared destination. Right-click its marker to cancel it; arrival also clears it. Shared destinations are temporary and are not forwarded automatically.
+
+Navigation summaries include the destination icon for actual objects, without an icon for empty map points. Large-map summaries stack in the lower-left corner. Shared packets include an optional catalog type key, so each recipient resolves the image locally; older packets retain the destination label without an object icon.
 
 ## Performance
 

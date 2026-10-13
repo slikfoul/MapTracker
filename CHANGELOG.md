@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.11.0
+
+- Shared static discoveries merge into each recipient's discovery set, with per-type visibility and retention controls and distant ally observations.
+- Optional live creature transmission with shared network identity and periodic position updates, disabled by default.
+- Expanded group lists prefer the left side and avoid their member icons and labels.
+
+## 0.10.0
+
+- Map-filter-only presets preserve configuration manager preferences and retain per-type display, discovery memory and notification choices.
+
+## 0.9.1
+
+- Three-state highlighting of navigation targets on both maps, arbitrary shared map destinations and navigation summaries in the lower-left large-map corner.
+
+## 0.9.0
+
+- Destination icons alongside personal and shared navigation names on the HUD and map summaries.
+
+## 0.8.0
+
+- Configurable map navigation selection, default Alt + left-click, and right-click cancellation on the selected target.
+
+- Alt + middle-click shared navigation with a separate blue destination and HUD arrow, preserving personal navigation.
+- Centered creature-name grouping enabled by default with a 15-meter radius.
+
 ## 0.7.1
 
 - Creature heads stand alone at their marker positions, with relationship colors retained in dot mode.

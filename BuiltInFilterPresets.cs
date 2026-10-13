@@ -17,9 +17,6 @@ namespace MapTracker
         {
             return new FilterPreset
             {
-                hostile = kind == BuiltInFilterPreset.Default,
-                tamed = kind == BuiltInFilterPreset.Household,
-                groupPlants = kind == BuiltInFilterPreset.Gathering ? (bool?)false : null,
                 types = entries.ToDictionary(e => e.key, e => new FilterPresetType
                 {
                     selected = kind == BuiltInFilterPreset.Default ? DefaultSelected(e) : Includes(e, kind),

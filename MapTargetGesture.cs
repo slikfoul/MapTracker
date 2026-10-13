@@ -1,13 +1,28 @@
+using System;
+using BepInEx.Configuration;
+using UnityEngine;
+
 namespace MapTracker
 {
     internal enum MapTargetAction { None, Select, Place, Clear, Expand, Consume }
     internal static class MapTargetGesture
     {
-        internal static MapTargetAction Resolve(bool alt, bool leftClick, bool hit, bool sameTarget, bool collapsedGroup)
+        internal static bool Matches(KeyboardShortcut shortcut, KeyCode button, Func<KeyCode, bool> pressed)
         {
-            if (!alt) return MapTargetAction.None;
-            // Swallow the native double/right-click actions while Alt is held.
-            if (!leftClick) return MapTargetAction.Consume;
+            if (shortcut.MainKey == KeyCode.None || shortcut.MainKey != button) return false;
+            foreach (var modifier in shortcut.Modifiers)
+            {
+                bool held = pressed(modifier);
+                if (modifier == KeyCode.LeftAlt || modifier == KeyCode.RightAlt) held |= pressed(KeyCode.LeftAlt) || pressed(KeyCode.RightAlt);
+                if (!held) return false;
+            }
+            return true;
+        }
+        internal static MapTargetAction Resolve(bool navigation, bool selectClick, bool hit, bool sameTarget, bool collapsedGroup)
+        {
+            if (!navigation) return MapTargetAction.None;
+            // A double-click on a navigation-bound button must not create a native pin.
+            if (!selectClick) return MapTargetAction.Consume;
             if (sameTarget) return MapTargetAction.Clear;
             if (!hit) return MapTargetAction.Place;
             if (collapsedGroup) return MapTargetAction.Expand;

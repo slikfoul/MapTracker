@@ -33,7 +33,15 @@ namespace MapTracker
         private readonly Plugin host;
         private readonly NavigationOverlay navigation = new NavigationOverlay();
         private readonly NavigationHud navigationHud = new NavigationHud();
-        private MarkerRecord target;
+        private readonly NavigationOverlay sharedNavigation = new NavigationOverlay();
+        private readonly NavigationHud sharedNavigationHud = new NavigationHud();
+        private readonly NavigationTargets targets = new NavigationTargets();
+        private MarkerRecord target { get => targets.Personal; set => targets.Personal = value; }
+        private MarkerRecord sharedTarget => targets.Shared;
+        private Minimap sharedWaypointMap;
+        private Minimap.PinData sharedWaypointPin;
+        private MarkerRecord sharedObject;
+        private string sharedObjectId, sharedObjectType;
         private bool pointTarget;
         private bool playerTarget;
         private ZDOID playerTargetId;
@@ -62,19 +70,62 @@ namespace MapTracker
         }
         internal void SelectPoint(Minimap map, Vector2 pointer)
         {
+            if (TryMapPosition(map, pointer, out var position)) SelectPosition(map, position, "Map destination");
+        }
+        internal static bool TryMapPosition(Minimap map, Vector2 pointer, out Vector3 position)
+        {
+            position = default;
+            if (map == null) return false;
             var canvas = map.m_largeRoot.GetComponentInParent<Canvas>()?.rootCanvas;
             var camera = canvas != null && canvas.renderMode != RenderMode.ScreenSpaceOverlay ? canvas.worldCamera : null;
-            if (!RectTransformUtility.RectangleContainsScreenPoint(map.m_mapImageLarge.rectTransform, pointer, camera)) return;
-            Vector3 position = (Vector3)ScreenToWorld.Invoke(map, new object[] { new Vector3(pointer.x, pointer.y, 0) });
-            if (float.IsNaN(position.x) || float.IsNaN(position.z) || float.IsInfinity(position.x) || float.IsInfinity(position.z)) return;
+            if (!RectTransformUtility.RectangleContainsScreenPoint(map.m_mapImageLarge.rectTransform, pointer, camera)) return false;
+            position = (Vector3)ScreenToWorld.Invoke(map, new object[] { new Vector3(pointer.x, pointer.y, 0) });
+            return PlayerNavigation.Finite(position);
+        }
+        internal void SelectPosition(Minimap map, Vector3 position, string name, CatalogEntry entry = null)
+        {
             ClearTarget();
-            target = new MarkerRecord { id = "navigation:point", type = "navigation:point", position = position,
-                entry = new CatalogEntry { key = "navigation:point", name = "Map destination", prefab = "Map destination", category = "Navigation" } };
+            target = new MarkerRecord { id = "navigation:point", type = "navigation:point", position = position, nameCache = name,
+                entry = entry ?? new CatalogEntry { key = "navigation:point", name = name, prefab = "Map destination", category = "Navigation" } };
             pointTarget = true; waypointMap = map;
             waypointPin = map.AddPin(position, Minimap.PinType.Icon3, "", false, false);
             tracking.RequestPinRefresh();
         }
         internal bool IsWaypointTarget => pointTarget && target != null;
+        internal MarkerRecord Target => target;
+        internal MarkerRecord SharedTarget => sharedTarget;
+        internal RectTransform SharedWaypointUI => sharedWaypointPin?.m_uiElement;
+        private bool SharedUsesPersonalPoint => pointTarget && NavigationTargets.SamePoint(target, sharedTarget);
+        internal void SelectSharedTarget(Minimap map, Vector3 position, string name, string type = null, string objectId = null)
+        {
+            RemoveSharedWaypoint(); targets.SetShared(position, name);
+            sharedObjectId = objectId; sharedObjectType = type;
+            sharedObject = tracking.FindNavigationObject(objectId, type, position);
+            if (sharedObject != null) sharedTarget.entry = sharedObject.entry;
+            var definition = host.Catalog.GetSavedDefinition(type);
+            if (definition != null) sharedTarget.entry = definition;
+            else if (type == "navigation:player")
+                sharedTarget.entry = new CatalogEntry { key = type, name = name, prefab = "Player", category = "Players" };
+            EnsureSharedWaypoint(map); tracking.SettingsChanged();
+        }
+        private void EnsureSharedWaypoint(Minimap map)
+        {
+            if (map == null || sharedTarget == null) return;
+            if (SharedUsesPersonalPoint && waypointPin != null) { RemoveSharedWaypoint(); return; }
+            if (sharedObject?.pin?.m_uiElement != null && sharedObject.pin.m_uiElement.gameObject.activeInHierarchy)
+            { RemoveSharedWaypoint(); return; }
+            if (sharedWaypointMap != map) RemoveSharedWaypoint();
+            if (sharedWaypointPin == null)
+            { sharedWaypointMap = map; sharedWaypointPin = map.AddPin(sharedTarget.position, Minimap.PinType.Icon3, "", false, false); }
+            else if (sharedWaypointPin.m_pos != sharedTarget.position)
+            { sharedWaypointPin.m_pos = sharedTarget.position; tracking.RequestPinRefresh(); }
+        }
+        private void RemoveSharedWaypoint()
+        {
+            if (sharedWaypointMap != null && sharedWaypointPin != null) sharedWaypointMap.RemovePin(sharedWaypointPin);
+            sharedWaypointMap = null; sharedWaypointPin = null;
+        }
+        internal void ClearSharedTarget() { RemoveSharedWaypoint(); targets.ClearShared(); sharedObject = null; sharedObjectId = sharedObjectType = null; tracking.SettingsChanged(); }
         internal RectTransform WaypointUI => waypointPin?.m_uiElement;
         private void RemoveWaypoint()
         { if (waypointMap != null && waypointPin != null) waypointMap.RemovePin(waypointPin); waypointPin = null; waypointMap = null; }
@@ -83,11 +134,13 @@ namespace MapTracker
             var selected = UnityEngine.EventSystems.EventSystem.current?.currentSelectedGameObject;
             bool typing = selected != null && (selected.GetComponent<UnityEngine.UI.InputField>()?.isFocused == true ||
                 selected.GetComponent<TMPro.TMP_InputField>()?.isFocused == true);
-            if (target == null || Player.m_localPlayer == null || typing || Chat.instance?.HasFocus() == true ||
+            if ((target == null && sharedTarget == null) || Player.m_localPlayer == null || typing || Chat.instance?.HasFocus() == true ||
                 global::Console.IsVisible() || (!host.Window.Open && TextInput.IsVisible()) || InventoryGui.IsVisible() || Menu.IsVisible()) return;
-            if (host.CancelNavigationKey.Value.IsDown()) ClearTarget();
+            if (host.CancelNavigationKey.Value.IsDown()) { ClearTarget(); ClearSharedTarget(); }
         }
         internal bool IsTarget(MarkerRecord record) => record == target;
+        internal bool IsSharedObject(MarkerRecord record) => sharedTarget != null && sharedObject == record;
+        internal bool IsNavigationTarget(MarkerRecord record) => IsTarget(record) || IsSharedObject(record);
         private void ReadNotificationTypes()
         {
             if (previousTypes == host.NotifyTypes.Value) return;
@@ -114,6 +167,17 @@ namespace MapTracker
         internal void Tick()
         {
             var player = Player.m_localPlayer;
+            if (sharedTarget != null)
+            {
+                var resolved = sharedObject != null && tracking.Contains(sharedObject) ? sharedObject :
+                    tracking.FindNavigationObject(sharedObjectId, sharedObjectType, sharedTarget.position);
+                if (sharedObject != null && resolved == null) ClearSharedTarget();
+                else
+                {
+                    if (sharedObject != resolved) { sharedObject = resolved; tracking.SettingsChanged(); }
+                    if (sharedObject != null) { sharedTarget.position = sharedObject.position; sharedTarget.entry = sharedObject.entry; }
+                }
+            }
             if (playerTarget && target != null)
             {
                 publicPlayers.Clear(); ZNet.instance?.GetOtherPublicPlayers(publicPlayers);
@@ -122,19 +186,32 @@ namespace MapTracker
             }
             if (target != null && ((!pointTarget && !playerTarget && !tracking.Contains(target)) || (player != null && NavigationArrival.Reached(
                 player.transform.position, target.position, player.InInterior(), player.IsTeleporting(), pointTarget)))) ClearTarget();
+            if (sharedTarget != null && (!host.ShareMarkers.Value || (player != null && NavigationArrival.Reached(
+                player.transform.position, sharedTarget.position, player.InInterior(), player.IsTeleporting(), sharedTarget.entry.category == "Navigation")))) ClearSharedTarget();
             if (Player.m_localPlayer != null && notifications.Count > 0 && Time.realtimeSinceStartup >= nextNotification)
             { Player.m_localPlayer.Message(MessageHud.MessageType.TopLeft, notifications.Dequeue()); nextNotification = Time.realtimeSinceStartup + 4; }
         }
         internal void DrawNavigation(Minimap map)
         {
+            EnsureSharedWaypoint(map);
             if (map != null && waypointPin?.m_iconElement != null)
             {
-                waypointPin.m_iconElement.color = new Color(1, 0.8f, 0.2f);
+                waypointPin.m_iconElement.color = TargetHighlight.Tint(true, SharedUsesPersonalPoint);
                 bool visible = host.Enabled.Value && (map.m_mode == Minimap.MapMode.Large ? host.LargeMap.Value : host.SmallMap.Value);
                 if (waypointPin.m_uiElement != null) waypointPin.m_uiElement.gameObject.SetActive(visible);
             }
             navigation.Apply(map, host.Enabled.Value && !host.Window.Open ? target : null, tracking.Name);
-            navigationHud.Apply(Minimap.instance, host.Enabled.Value && host.ShowNavigationArrow.Value && !host.Window.Open ? target : null, tracking.Name);
+            if (map != null && sharedWaypointPin?.m_iconElement != null)
+            {
+                sharedWaypointPin.m_iconElement.color = new Color(0.35f, 0.85f, 1);
+                bool visible = host.Enabled.Value && host.ShareMarkers.Value && (map.m_mode == Minimap.MapMode.Large ? host.LargeMap.Value : host.SmallMap.Value);
+                if (sharedWaypointPin.m_uiElement != null) sharedWaypointPin.m_uiElement.gameObject.SetActive(visible);
+            }
+            bool sharedVisible = host.Enabled.Value && host.ShareMarkers.Value && !host.Window.Open;
+            sharedNavigation.Apply(map, sharedVisible ? sharedTarget : null, tracking.Name, shared: true, paired: target != null);
+            bool arrows = host.Enabled.Value && host.ShowNavigationArrow.Value && !host.Window.Open;
+            navigationHud.Apply(Minimap.instance, arrows ? target : null, tracking.Name, paired: sharedTarget != null && sharedVisible);
+            sharedNavigationHud.Apply(Minimap.instance, arrows && sharedVisible ? sharedTarget : null, tracking.Name, shared: true, paired: target != null);
         }
         internal void Locate(MarkerRecord record)
         {
@@ -145,6 +222,6 @@ namespace MapTracker
             HarmonyLib.AccessTools.Method(typeof(Minimap), "CenterMap").Invoke(map, new object[] { record.position });
             tracking.RequestPinRefresh();
         }
-        internal void Reset() { RemoveWaypoint(); target = null; pointTarget = playerTarget = false; playerTargetId = default; publicPlayers.Clear(); notifications.Clear(); navigation.Dispose(); navigationHud.Dispose(); }
+        internal void Reset() { RemoveWaypoint(); RemoveSharedWaypoint(); targets.ClearShared(); sharedObject = null; sharedObjectId = sharedObjectType = null; target = null; pointTarget = playerTarget = false; playerTargetId = default; publicPlayers.Clear(); notifications.Clear(); navigation.Dispose(); navigationHud.Dispose(); sharedNavigation.Dispose(); sharedNavigationHud.Dispose(); }
     }
 }

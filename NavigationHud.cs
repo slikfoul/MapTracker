@@ -11,8 +11,9 @@ namespace MapTracker
         private TextMeshProUGUI text;
         private float nextCaption;
         private MarkerRecord previousTarget;
+        private readonly NavigationTargetIcon targetIcon = new NavigationTargetIcon();
 
-        internal void Apply(Minimap map, MarkerRecord target, Func<MarkerRecord, string> name)
+        internal void Apply(Minimap map, MarkerRecord target, Func<MarkerRecord, string> name, bool shared = false, bool paired = false)
         {
             var player = Player.m_localPlayer;
             var hud = Hud.instance;
@@ -26,6 +27,10 @@ namespace MapTracker
             if (root != null && root.parent != parent) Dispose();
             if (root == null) Create(parent, map);
             if (!root.gameObject.activeSelf) root.gameObject.SetActive(true);
+            root.anchoredPosition = new Vector2(paired ? (shared ? 175 : -175) : 0, -75);
+            Color tint = shared ? new Color(0.35f, 0.85f, 1) : new Color(1, 0.85f, 0.35f);
+            arrow.GetComponent<NavigationArrowGraphic>().color = tint;
+            text.color = tint;
 
             var origin = player.transform.position;
             var camera = Utils.GetMainCamera();
@@ -36,7 +41,11 @@ namespace MapTracker
             arrow.localRotation = Quaternion.Euler(0, 0, -heading);
             if (previousTarget == target && Time.realtimeSinceStartup < nextCaption) return;
             previousTarget = target;
-            string caption = name(target) + "\n" + Mathf.RoundToInt(DiscoveryQuery.Distance(target, origin)) + " m";
+            string title = name(target);
+            text.rectTransform.anchoredPosition = new Vector2(NavigationTargetIcon.HasIcon(target) ? 14 : 0, -45);
+            float titleWidth = Mathf.Min(290, text.GetPreferredValues(title).x);
+            targetIcon.Apply(root, map, target, new Vector2(14 - titleWidth * 0.5f - 22, -55), 30);
+            string caption = title + "\n" + Mathf.RoundToInt(DiscoveryQuery.Distance(target, origin)) + " m";
             if (text.text != caption) text.text = caption;
             nextCaption = Time.realtimeSinceStartup + 0.2f;
         }
@@ -71,12 +80,13 @@ namespace MapTracker
             text.overflowMode = TextOverflowModes.Ellipsis;
             text.rectTransform.anchorMin = text.rectTransform.anchorMax = new Vector2(0.5f, 1);
             text.rectTransform.pivot = new Vector2(0.5f, 1);
-            text.rectTransform.sizeDelta = new Vector2(340, 50);
-            text.rectTransform.anchoredPosition = new Vector2(0, -45);
+            text.rectTransform.sizeDelta = new Vector2(290, 50);
+            text.rectTransform.anchoredPosition = new Vector2(14, -45);
         }
 
         public void Dispose()
         {
+            targetIcon.Dispose();
             if (root != null) UnityEngine.Object.Destroy(root.gameObject);
             root = null; arrow = null; text = null; previousTarget = null; nextCaption = 0;
         }

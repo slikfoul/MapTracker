@@ -3,20 +3,19 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using Newtonsoft.Json;
 
 namespace MapTracker
 {
     public sealed class FilterPresetType
     {
         public bool selected, keep;
+        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)] public bool? notify;
     }
     public sealed class FilterPreset
     {
         public string name;
         public Dictionary<string, FilterPresetType> types = new Dictionary<string, FilterPresetType>();
-        public bool hostile = true, friendly, animals, tamed;
-        public bool? groupPlants;
-        public Dictionary<string, Dictionary<string, string>> display;
     }
     public sealed class FilterPresetDocument
     {
@@ -90,12 +89,10 @@ namespace MapTracker
         {
             return new FilterPreset
             {
-                name = name, hostile = host.Hostile.Value, friendly = host.Friendly.Value,
-                animals = host.Animals.Value, tamed = host.Tamed.Value,
-                groupPlants = host.GroupPlants.Value,
-                display = PresetDisplay.Capture(host.Config),
+                name = name,
                 types = host.Catalog.Entries.ToDictionary(e => e.key, e => new FilterPresetType
-                { selected = e.Selected.Value, keep = e.KeepVisible != null && e.KeepVisible.Value })
+                { selected = e.Selected.Value, keep = e.KeepVisible != null && e.KeepVisible.Value,
+                    notify = !e.creature && e.category != "Dropped items" ? (bool?)host.Tracking.Discoveries.Notifies(e.key) : null })
             };
         }
         internal static void Apply(Plugin host, FilterPreset preset)
@@ -103,19 +100,23 @@ namespace MapTracker
             bool autosave = host.Config.SaveOnConfigSet; host.Config.SaveOnConfigSet = false;
             try
             {
-                PresetDisplay.Apply(host.Config, preset.display);
-                foreach (var entry in host.Catalog.Entries)
-                {
-                    preset.types.TryGetValue(entry.key, out var saved);
-                    entry.Selected.Value = saved != null && saved.selected;
-                    if (entry.KeepVisible != null) entry.KeepVisible.Value = saved != null && saved.keep;
-                }
-                host.Hostile.Value = preset.hostile; host.Friendly.Value = preset.friendly;
-                host.Animals.Value = preset.animals; host.Tamed.Value = preset.tamed;
-                if (preset.groupPlants.HasValue) host.GroupPlants.Value = preset.groupPlants.Value;
+                ApplyTypes(host.Catalog.Entries, preset, (entries, value) => host.Tracking.Discoveries.SetNotify(entries, value));
             }
             finally { host.Config.SaveOnConfigSet = autosave; }
             host.Config.Save(); host.Tracking.RequestPinRefresh();
+        }
+        internal static void ApplyTypes(IEnumerable<CatalogEntry> entries, FilterPreset preset, Action<IEnumerable<CatalogEntry>, bool> notification = null)
+        {
+            var enableNotify = new List<CatalogEntry>(); var disableNotify = new List<CatalogEntry>();
+            foreach (var entry in entries)
+            {
+                preset.types.TryGetValue(entry.key, out var saved);
+                entry.Selected.Value = saved != null && saved.selected;
+                if (entry.KeepVisible != null) entry.KeepVisible.Value = saved != null && saved.keep;
+                if (saved?.notify != null) (saved.notify.Value ? enableNotify : disableNotify).Add(entry);
+            }
+            if (enableNotify.Count > 0) notification?.Invoke(enableNotify, true);
+            if (disableNotify.Count > 0) notification?.Invoke(disableNotify, false);
         }
     }
 }

@@ -39,6 +39,7 @@ try {
         @{ Type = 'TextInput'; Method = 'IsVisible'; Parameters = 0 },
         @{ Type = 'Minimap'; Method = 'UpdatePins'; Parameters = 0 },
         @{ Type = 'Minimap'; Method = 'OnMapLeftClick'; Parameters = 0 },
+        @{ Type = 'Minimap'; Method = 'OnMapMiddleClick'; Parameters = 1 },
         @{ Type = 'Minimap'; Method = 'OnMapDblClick'; Parameters = 0 },
         @{ Type = 'Minimap'; Method = 'RemovePinUnderPointer'; Parameters = 0 },
         @{ Type = 'Teleport'; Method = 'Interact'; Parameters = 3 }
@@ -107,7 +108,7 @@ try {
             if ($utilityType.Methods | Where-Object Name -EQ 'Update') { throw 'Temporary utility must not run an update loop.' }
         } finally { $utility.Dispose() }
     }
-    Write-Output 'PASS: no Jotunn or ValueTuple dependency; runtime dependency files exist; seven Harmony targets and network registry field match.'
+    Write-Output 'PASS: no Jotunn or ValueTuple dependency; runtime dependency files exist; Harmony targets and network registry field match.'
     Write-Output 'PASS: shared pin ownership, map backup, routed RPC and separate manual migration integration verified.'
     Write-Output 'This static check does not validate in-game behavior.'
     Write-Output 'PASS: seven embedded PNG icons and the native game decoder signature verified.'

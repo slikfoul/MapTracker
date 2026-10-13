@@ -132,6 +132,99 @@ Check(CleanDungeons() && !dungeonRecords.ContainsKey(extraLegacy.id) && dungeonR
     dungeonRecords["99:42"].visited && dungeonRecords.ContainsKey("other-kind"),
     "legacy/native duplicates keep the specific native entrance while preserving other known dungeon kinds");
 
+// Exercise production merging using both the spatial index and direct fallback.
+var sharingType = typeof(MarkerFile).Assembly.GetType("MapTracker.SharedDiscoveries");
+var sharingReceive = sharingType.GetMethod("Receive", lifetimeFlags);
+var sharingObserve = sharingType.GetMethod("Observe", lifetimeFlags);
+var sharingCleanup = sharingType.GetMethod("RemoveDuplicates", lifetimeFlags);
+var sharingHandoff = sharingType.GetMethod("HandOffCreature", lifetimeFlags);
+var indexType = typeof(MarkerFile).Assembly.GetType("MapTracker.SharedDiscoveryIndex");
+var combined = new Dictionary<string, MarkerRecord>();
+MarkerRecord SharedRecord(string id, CatalogEntry entry, Vector3 position, bool shared = false)
+{
+    var record = new MarkerRecord { id = id, type = entry.key, position = position, shared = shared, observed = true };
+    recordEntry.SetValue(record, entry); return record;
+}
+object BuildIndex() => Activator.CreateInstance(indexType, recordFlags, null, new object[] { combined.Values }, null);
+MarkerRecord ReceiveShared(MarkerRecord record, long peer = 1, float time = 0, object index = null) =>
+    (MarkerRecord)sharingReceive.Invoke(null, new object[] { combined, record, peer, time, index });
+var ownEntrance = SharedRecord("local-entrance", mineEntry, entrancePosition);
+ownEntrance.completed = ownEntrance.visited = ownEntrance.favorite = true;
+combined.Add(ownEntrance.id, ownEntrance);
+var mergeIndex = BuildIndex();
+Check(ReceiveShared(SharedRecord("ally-entrance", mineEntry, entrancePosition), index: mergeIndex) == ownEntrance && combined.Count == 1,
+    "ally discovery with a different network ID merges into the same local entrance through the spatial index");
+Check(!ownEntrance.shared && ownEntrance.completed && ownEntrance.visited && ownEntrance.favorite,
+    "received data preserves local ownership, personal favorites and dungeon progress");
+Check(ReceiveShared(SharedRecord("local-entrance", mineEntry, entrancePosition)) == ownEntrance && combined.Count == 1,
+    "repeat packets and identical network IDs never duplicate a discovery");
+var nearbyEntrance = ReceiveShared(SharedRecord("separate-entrance", mineEntry, entrancePosition + new Vector3(3, 0, 0)), index: mergeIndex);
+ReceiveShared(SharedRecord("separate-type", otherEntry, entrancePosition), index: mergeIndex);
+ReceiveShared(SharedRecord("separate-floor", mineEntry, entrancePosition + new Vector3(0, 5, 0)), index: mergeIndex);
+Check(combined.Count == 4 && nearbyEntrance.shared,
+    "different nearby entrances, known dungeon types and floors retain individual discoveries");
+var sharedPortalEntry = new CatalogEntry { key = "prefab:portal_wood", category = "Portals" };
+var sharedPortal = ReceiveShared(SharedRecord("ally-portal", sharedPortalEntry, new Vector3(-2.01f, 0, 8)), index: mergeIndex);
+var namedPortal = SharedRecord("other-peer-portal", sharedPortalEntry, new Vector3(-1.99f, 0, 8));
+namedPortal.portalTag = "South";
+Check(ReceiveShared(namedPortal, peer: 2, index: mergeIndex) == sharedPortal && sharedPortal.portalTag == "South" && combined.Count == 5,
+    "shared portal aliases across a negative-coordinate cell boundary merge and update their tag");
+var oreEntry = new CatalogEntry { key = "prefab:MineRock_Copper", category = "Ore" };
+var oreShared = ReceiveShared(SharedRecord("ally-ore", oreEntry, new Vector3(20, 3, 10)), index: mergeIndex);
+Check(ReceiveShared(SharedRecord("local-ore-alias", oreEntry, new Vector3(20, 3, 10)), index: mergeIndex) == oreShared && combined.Count == 6,
+    "ore discovered by multiple peers becomes one normal discovery record");
+ReceiveShared(SharedRecord("separate-ore", oreEntry, new Vector3(20.2f, 3, 10)), index: mergeIndex);
+Check(combined.Count == 7, "adjacent separate ore objects are not collapsed by the dungeon tolerance");
+sharingObserve.Invoke(null, new object[] { ownEntrance, 1L, true, 10f, 40f });
+sharingObserve.Invoke(null, new object[] { ownEntrance, 2L, true, 20f, 40f });
+sharingObserve.Invoke(null, new object[] { ownEntrance, 1L, false, 25f, 40f });
+var remoteDeadline = typeof(MarkerRecord).GetField("remoteSeenUntil", recordFlags);
+Check((float)remoteDeadline.GetValue(ownEntrance) == 60,
+    "one peer leaving an area does not erase another peer's current observation");
+var savedCombined = DataJson.Write(new MarkerFile { world = "shared-world", character = "recipient", markers = combined.Values.ToList() });
+var persistedCombined = DataJson.Read<MarkerFile>(savedCombined);
+Check(persistedCombined.markers.Count == 7 && persistedCombined.markers.Any(r => r.id == oreShared.id && r.shared) &&
+    !savedCombined.Contains("remoteSeenUntil") && !savedCombined.Contains("remoteObservers"),
+    "received static discoveries survive saving while runtime observation timers never persist");
+combined.Add("legacy-remote-duplicate", SharedRecord("legacy-remote-duplicate", mineEntry, entrancePosition, true));
+var mobDuplicateA = SharedRecord("network-mob-a", mobEntry, entrancePosition);
+var mobDuplicateB = SharedRecord("network-mob-b", mobEntry, entrancePosition);
+recordDynamic.SetValue(mobDuplicateA, true); recordDynamic.SetValue(mobDuplicateB, true);
+combined.Add(mobDuplicateA.id, mobDuplicateA); combined.Add(mobDuplicateB.id, mobDuplicateB);
+Check((bool)sharingCleanup.Invoke(null, new object[] { combined, removePin }) && combined.Count == 9 &&
+    combined.ContainsKey(ownEntrance.id) && !combined.ContainsKey("legacy-remote-duplicate") &&
+    combined.ContainsKey(mobDuplicateA.id) && combined.ContainsKey(mobDuplicateB.id),
+    "legacy remote duplicates collapse into the local entrance while distinct co-located monsters remain separate");
+Check(!(bool)sharingCleanup.Invoke(null, new object[] { combined, removePin }), "shared discovery cleanup is idempotent");
+var remoteMobUpdate = new MarkerRecord { position = entrancePosition + new Vector3(2, 0, 0), creatureLevel = 2, creatureRelation = 1 };
+sharingType.GetMethod("ObserveCreature", lifetimeFlags).Invoke(null, new object[] { mobDuplicateA, remoteMobUpdate, 2L, 100f });
+Check((bool)sharingHandoff.Invoke(null, new object[] { mobDuplicateA, 101f }) && mobDuplicateA.shared && mobDuplicateA.sourcePeer == 2,
+    "a creature leaving local scan range transfers to fresh ally observation without a duplicate marker");
+Check(mobDuplicateA.position.x == remoteMobUpdate.position.x && mobDuplicateA.creatureLevel == 2 && mobDuplicateA.creatureRelation == 1,
+    "handoff immediately uses the ally's latest coordinates, level and relationship even when local transmission is disabled");
+Check(!(bool)sharingHandoff.Invoke(null, new object[] { mobDuplicateB, 101f }) && !mobDuplicateB.shared &&
+    !(bool)sharingHandoff.Invoke(null, new object[] { ownEntrance, 25f }),
+    "creature handoff requires a fresh observer and never converts static discoveries");
+var deltaType = typeof(MarkerFile).Assembly.GetType("MapTracker.CreatureNetworkDelta");
+var delta = Activator.CreateInstance(deltaType, true);
+var deltaSelect = deltaType.GetMethod("Select", recordFlags);
+var transmissionRecords = new List<MarkerRecord> { mobDuplicateA, mobDuplicateB };
+int DeltaCount(long peer, float time) => ((List<MarkerRecord>)deltaSelect.Invoke(delta, new object[] { peer, transmissionRecords, time })).Count;
+Check(DeltaCount(1, 0) == 2 && DeltaCount(1, 0.5f) == 0 && DeltaCount(1, 1) == 0,
+    "stationary creature snapshots are sent once rather than repeated every half second");
+Check(DeltaCount(2, 1) == 2 && DeltaCount(1, 1.5f) == 2,
+    "new peers get an initial snapshot and stationary creatures retain periodic freshness heartbeats");
+mobDuplicateA.position += new Vector3(0.1f, 0, 0);
+Check(DeltaCount(1, 2) == 1, "a moving creature transmits its new position without resending unchanged neighbors");
+mobDuplicateB.creatureLevel = 3;
+Check(DeltaCount(1, 2.5f) == 1, "a creature level change is transmitted before its heartbeat");
+mobDuplicateA.creatureRelation = 4;
+Check(DeltaCount(1, 2.6f) == 1, "taming or relationship changes are transmitted before the heartbeat");
+deltaType.GetMethod("RemovePeer", recordFlags).Invoke(delta, new object[] { 1L });
+Check(DeltaCount(1, 2.7f) == 2, "a returning peer receives all current creatures after its transmission cache is retired");
+deltaType.GetMethod("Reset", recordFlags).Invoke(delta, null);
+Check(DeltaCount(2, 2.8f) == 2, "turning creature transmission off clears its delta state for later re-enabling");
+
 var reconciliationType = typeof(MarkerFile).Assembly.GetType("MapTracker.PortalReconciliation");
 var reconciliationCheck = reconciliationType.GetMethod("Check", recordFlags);
 var reconciliationClear = reconciliationType.GetMethod("Clear", recordFlags);
@@ -204,8 +297,8 @@ bool KeepsByDefault(bool dungeon, string category) => (bool)keepDefaultMethod.In
 Check(KeepsByDefault(true, "Dungeons") && KeepsByDefault(false, "Portals") &&
     new[] { "Ore", "Plants and pickables", "Containers", "Player structures", "Locations", "Trees", "Other" }.All(category => !KeepsByDefault(false, category)),
     "only dungeon entrances and portals retain remembered markers by default");
-bool VisibleDiscovery(bool keep, bool loaded, bool remote, float radius, float distance) =>
-    (bool)visibilityMethod.Invoke(null, new object[] { keep, loaded, remote, radius, distance });
+bool VisibleDiscovery(bool keep, bool loaded, bool remote, float radius, float distance, bool freshRemote = false) =>
+    (bool)visibilityMethod.Invoke(null, new object[] { keep, loaded, remote, radius, distance, freshRemote });
 Check(VisibleDiscovery(true, false, false, 50, 1000) && !VisibleDiscovery(false, false, false, 0, 0),
     "remembered portals remain after leaving; nearby-only discoveries hide when unloaded");
 Check(VisibleDiscovery(false, true, false, 50, 50) && !VisibleDiscovery(false, true, false, 50, 51) && VisibleDiscovery(false, true, false, 0, 1000),
@@ -213,11 +306,14 @@ Check(VisibleDiscovery(false, true, false, 50, 50) && !VisibleDiscovery(false, t
 Check(!VisibleDiscovery(false, false, true, 0, 1) && VisibleDiscovery(true, false, true, 50, 1000),
     "remote discoveries obey the per-type memory choice and are not mistaken for client-loaded objects");
 var sightVisibilityMethod = visibilityType.GetMethod("ShowSight", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
-bool VisibleSight(bool keep, bool seen, bool remote) => (bool)sightVisibilityMethod.Invoke(null, new object[] { keep, seen, remote });
+bool VisibleSight(bool keep, bool seen, bool remote, bool freshRemote = false) => (bool)sightVisibilityMethod.Invoke(null, new object[] { keep, seen, remote, freshRemote });
 Check(VisibleSight(false, true, false) && !VisibleSight(false, false, false) && VisibleSight(true, false, false),
     "line-of-sight discoveries require visibility unless a local remembered marker is enabled");
-Check(!VisibleSight(false, true, true) && !VisibleSight(true, false, true),
-    "received remote markers cannot bypass the local line-of-sight mode");
+Check(!VisibleSight(false, true, true) && VisibleSight(true, false, true) && VisibleSight(false, false, true, true),
+    "line-of-sight mode accepts retained shared discoveries and fresh observations from an ally");
+Check(VisibleDiscovery(false, false, true, 30, 5000, true) && !VisibleDiscovery(false, false, true, 30, 5000) &&
+    VisibleDiscovery(true, false, true, 30, 5000),
+    "fresh ally observations ignore receiver distance while retention remains governed by Keep discovered");
 var radiusType = typeof(MarkerFile).Assembly.GetType("MapTracker.RadiusSetting");
 var radiusBind = radiusType.GetMethod("Bind", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
 var radiusDistance = radiusType.GetMethod("Distance", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
@@ -297,8 +393,7 @@ Check(defaultPreset.types.Where(p => p.Value.selected).Select(p => p.Key).Order(
 var gatheringPreset = BuiltInFilterPresets.Build(builtInSamples, BuiltInFilterPreset.Gathering);
 Check(gatheringPreset.types.Where(p => p.Value.selected).Select(p => p.Key).Order().SequenceEqual(
     new[] { "beehive", "blueberry", "dandelion", "modHerb", "mushroom", "raspberry", "thistle" }) &&
-    gatheringPreset.types["beehive"].keep && builtInSamples.Where(e => e.category == "Plants and pickables").All(e => !gatheringPreset.types[e.key].keep) &&
-    !gatheringPreset.hostile && gatheringPreset.groupPlants == false,
+    gatheringPreset.types["beehive"].keep && builtInSamples.Where(e => e.category == "Plants and pickables").All(e => !gatheringPreset.types[e.key].keep),
     "Gathering shows botanical pickables nearby without remembering them, retains wild beehives, and excludes loose items and effects");
 var explorationPreset = BuiltInFilterPresets.Build(builtInSamples, BuiltInFilterPreset.Exploration);
 Check(explorationPreset.types.Where(p => p.Value.selected).Select(p => p.Key).Order().SequenceEqual(
@@ -306,9 +401,8 @@ Check(explorationPreset.types.Where(p => p.Value.selected).Select(p => p.Key).Or
     "Exploration remembers locations, dungeon entrances, portals, traders and offering altars");
 var householdPreset = BuiltInFilterPresets.Build(builtInSamples, BuiltInFilterPreset.Household);
 Check(householdPreset.types.Where(p => p.Value.selected).Select(p => p.Key).Order().SequenceEqual(
-    new[] { "enemy", "ownHive", "portal", "sap" }) && householdPreset.tamed && !householdPreset.hostile &&
-    !householdPreset.friendly && !householdPreset.animals && !householdPreset.types["enemy"].keep,
-    "Household shows tamed creatures only, with remembered built beehives, sap collectors and portals");
+    new[] { "enemy", "ownHive", "portal", "sap" }) && !householdPreset.types["enemy"].keep,
+    "Household selects creature and resource types without changing configurator relationship filters");
 string presetCheckFolder = Path.Combine(AppContext.BaseDirectory, "MapTrackerPresetChecks-" + Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(presetCheckFolder);
 try
@@ -402,17 +496,15 @@ try
     Check(new FilterPresetStore(presetCheckPath).BuiltInDeleted(BuiltInFilterPreset.Gathering) &&
         !presetStore.BuiltInDeleted(BuiltInFilterPreset.Default),
         "built-in deletion survives reload without removing other built-ins");
-    presetStore.Save(new FilterPreset { name = "  Руда / север  ", hostile = false, animals = true,
-        groupPlants = false,
+    presetStore.Save(new FilterPreset { name = "  Руда / север  ",
         types = new() { ["prefab:MineRock_Copper"] = new() { selected = true, keep = false },
             ["prefab:portal_wood"] = new() { selected = false, keep = true } } });
     var savedPreset = new FilterPresetStore(presetCheckPath).Read().Single();
     Check(savedPreset.name == "Руда / север" && savedPreset.types["prefab:MineRock_Copper"].selected &&
-        !savedPreset.types["prefab:MineRock_Copper"].keep && savedPreset.types["prefab:portal_wood"].keep &&
-        !savedPreset.hostile && savedPreset.animals && savedPreset.groupPlants == false,
-        "custom preset preserves type, relationship and plant grouping filters across store reload");
-    presetStore.Save(new FilterPreset { name = "руда / СЕВЕР", friendly = true });
-    Check(presetStore.Read().Count == 1 && presetStore.Read()[0].friendly && File.Exists(presetCheckPath + ".bak"),
+        !savedPreset.types["prefab:MineRock_Copper"].keep && savedPreset.types["prefab:portal_wood"].keep,
+        "custom preset preserves display and keep-discovered choices across store reload");
+    presetStore.Save(new FilterPreset { name = "руда / СЕВЕР", types = new() { ["prefab:portal_wood"] = new() { selected = true } } });
+    Check(presetStore.Read().Count == 1 && presetStore.Read()[0].types["prefab:portal_wood"].selected && File.Exists(presetCheckPath + ".bak"),
         "saving the same name replaces the preset atomically and retains a backup");
     presetStore.Save(new FilterPreset { name = "Данжи" });
     Check(presetStore.Delete("РУДА / север") && presetStore.Read().Single().name == "Данжи" && !presetStore.Delete("missing"),
@@ -423,7 +515,7 @@ try
     try { presetStore.Save(new FilterPreset { name = " " }); } catch (ArgumentException) { invalidNameRejected = true; }
     Check(invalidNameRejected && presetStore.Read().Count == 1, "blank names cannot alter stored presets");
     File.WriteAllText(presetCheckPath, "{\"schema\":1,\"presets\":[{\"name\":\"Legacy\",\"types\":{}}]}");
-    Check(presetStore.Read().Single().groupPlants == null && !presetStore.BuiltInDeleted(BuiltInFilterPreset.Gathering),
+    Check(presetStore.Read().Single().types.Count == 0 && !presetStore.BuiltInDeleted(BuiltInFilterPreset.Gathering),
         "legacy preset documents remain readable without changing existing plant grouping");
     File.WriteAllText(presetCheckPath, "{invalid");
     bool corruptRejected = false;
@@ -462,60 +554,51 @@ var nearbyRule = typeof(MarkerFile).Assembly.GetType("MapTracker.MarkerPresentat
 bool Nearby(bool shown, float distance) => (bool)nearbyRule.Invoke(null, new object[] { shown, distance, 70, 5 });
 Check(!Nearby(false, 72) && Nearby(true, 72) && !Nearby(true, 76) && Nearby(false, 70),
     "distance hysteresis retains a shown name across the boundary without revealing more distant new names");
-string displayTestFolder = Path.Combine(AppContext.BaseDirectory, "DisplayPresetChecks-" + Guid.NewGuid().ToString("N"));
-Directory.CreateDirectory(displayTestFolder);
+string filterScopeFolder = Path.Combine(AppContext.BaseDirectory, "MapTrackerFilterScope-" + Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(filterScopeFolder);
 try
 {
-    var displayConfig = new BepInEx.Configuration.ConfigFile(Path.Combine(displayTestFolder, "settings.cfg"), false) { SaveOnConfigSet = false };
-    var miniSize = displayConfig.Bind("Icons", "Minimap creature icon size", 19, new BepInEx.Configuration.ConfigDescription("", new BepInEx.Configuration.AcceptableValueRange<int>(12, 48)));
-    var bigIcons = displayConfig.Bind("Icons", "Creature icons", true);
-    var miniPlants = displayConfig.Bind("Map categories", "Minimap: Plants and pickables", false);
-    var nameRange = displayConfig.Bind("Names", "Minimap name distance", 70);
-    var sharingSetting = displayConfig.Bind("Sharing", "Share discoveries", false);
-    var enabledSetting = displayConfig.Bind("General", "Enabled", true);
-    var capturedDisplay = PresetDisplay.Capture(displayConfig);
-    var fullPreset = new FilterPreset { name = "Full", display = capturedDisplay };
-    var displayStore = new FilterPresetStore(Path.Combine(displayTestFolder, "presets.json"));
-    displayStore.Save(fullPreset);
-    miniSize.Value = 35; bigIcons.Value = false; miniPlants.Value = true; nameRange.Value = 125;
-    PresetDisplay.Apply(displayConfig, displayStore.Read().Single().display);
-    Check(miniSize.Value == 19 && bigIcons.Value && !miniPlants.Value && nameRange.Value == 70,
-        "full display presets restore independent sizes, icon modes, category layers and name distance after reload");
-    Check(!capturedDisplay.ContainsKey("Sharing") && !capturedDisplay.ContainsKey("General"),
-        "display presets cannot change sharing permissions or disable the plugin");
-    PresetDisplay.Apply(displayConfig, new Dictionary<string, Dictionary<string, string>> { ["Sharing"] = new() { ["Share discoveries"] = "true" }, ["General"] = new() { ["Enabled"] = "false" } });
-    Check(!sharingSetting.Value && enabledSetting.Value, "unknown or non-presentation preset settings are ignored");
-    PresetDisplay.Apply(displayConfig, null);
-    Check(miniSize.Value == 19 && !miniPlants.Value, "legacy filter presets retain current map presentation");
-    bool invalidDisplayRejected = false;
-    try { PresetDisplay.Apply(displayConfig, new Dictionary<string, Dictionary<string, string>> { ["Icons"] = new() { ["Creature icons"] = "false", ["Minimap creature icon size"] = "999" } }); }
-    catch (ArgumentException) { invalidDisplayRejected = true; }
-    Check(invalidDisplayRejected && bigIcons.Value && miniSize.Value == 19, "out-of-range display presets fail before applying any settings");
-    displayConfig.Save();
-    var reloadedDisplay = new BepInEx.Configuration.ConfigFile(Path.Combine(displayTestFolder, "settings.cfg"), false) { SaveOnConfigSet = false };
-    Check(!reloadedDisplay.Bind("Map categories", "Minimap: Plants and pickables", true).Value,
-        "category map-layer choices persist without affecting discovery selections");
-    var perMapConfig = new BepInEx.Configuration.ConfigFile(Path.Combine(displayTestFolder, "per-map.cfg"), false) { SaveOnConfigSet = false };
-    perMapConfig.Bind("Icons", "Minimap creature icon size", 27);
-    perMapConfig.Bind("Names", "Minimap name distance", 95);
-    perMapConfig.Bind("Maps", "Large map", false);
-    var perMapSize = ConfigSections.Bind(perMapConfig, "Icons", "Minimap", "Minimap creature icon size", 19, new BepInEx.Configuration.ConfigDescription(""));
-    var perMapDistance = ConfigSections.Bind(perMapConfig, "Names", "Minimap", "Minimap name distance", 70, new BepInEx.Configuration.ConfigDescription(""));
-    var perMapLarge = ConfigSections.Bind(perMapConfig, "Maps", "Large map", "Large map", true, new BepInEx.Configuration.ConfigDescription(""));
-    Check(perMapSize.Value == 27 && perMapDistance.Value == 95 && !perMapLarge.Value && !perMapConfig.Any(p => p.Key.Section == "Maps" || p.Key.Section == "Icons"),
-        "per-map configuration sections preserve saved sizes, distances and disabled large-map visibility without duplicate rows");
-    PresetDisplay.Apply(perMapConfig, new Dictionary<string, Dictionary<string, string>> {
-        ["Icons"] = new() { ["Minimap creature icon size"] = "31" }, ["Names"] = new() { ["Minimap name distance"] = "125" },
-        ["Maps"] = new() { ["Large map"] = "true" } });
-    Check(perMapSize.Value == 31 && perMapDistance.Value == 125 && perMapLarge.Value,
-        "legacy presentation presets still apply to the reorganized map sections");
-    PresetDisplay.Apply(perMapConfig, new Dictionary<string, Dictionary<string, string>> {
-        ["Icons"] = new() { ["Minimap creature icon size"] = "22" }, ["Minimap"] = new() { ["Minimap creature icon size"] = "29" } });
-    Check(perMapSize.Value == 29 && PresetDisplay.Capture(perMapConfig).ContainsKey("Minimap") &&
-        DefaultSettings.Value("Minimap", "Hide minimap names", false) && !DefaultSettings.Value("Minimap", "Minimap creature icons", true),
-        "new map-specific preset entries take precedence and retain the established first-install defaults");
+    var scopeConfig = new BepInEx.Configuration.ConfigFile(Path.Combine(filterScopeFolder, "settings.cfg"), false) { SaveOnConfigSet = false };
+    var scopeSize = scopeConfig.Bind("Minimap", "Minimap creature icon size", 35);
+    var scopeNames = scopeConfig.Bind("Names", "Creature name size", 24);
+    var scopeGroup = scopeConfig.Bind("Grouping", "Group plants", true);
+    var scopeHostile = scopeConfig.Bind("Creatures", "Hostile", false);
+    var scopeSharing = scopeConfig.Bind("Sharing", "Share discoveries", false);
+    var scopeEntry = new CatalogEntry { key = "portal" };
+    typeof(CatalogEntry).GetField("Selected", recordFlags).SetValue(scopeEntry, scopeConfig.Bind("Types", "portal", false));
+    typeof(CatalogEntry).GetField("KeepVisible", recordFlags).SetValue(scopeEntry, scopeConfig.Bind("Remember", "portal", false));
+    string legacyPresetJson = "{\"name\":\"Old\",\"hostile\":true,\"groupPlants\":false,\"types\":{\"portal\":{\"selected\":true,\"keep\":true}},\"display\":{\"Minimap\":{\"Minimap creature icon size\":\"12\"},\"Names\":{\"Creature name size\":\"10\"},\"Sharing\":{\"Share discoveries\":\"true\"}}}";
+    var legacyScopedPreset = DataJson.Read<FilterPreset>(legacyPresetJson);
+    var applyTypeFilters = typeof(MarkerFile).Assembly.GetType("MapTracker.FilterPresets").GetMethod("ApplyTypes", lifetimeFlags);
+    applyTypeFilters.Invoke(null, new object[] { new[] { scopeEntry }, legacyScopedPreset, null });
+    Check(scopeConfig.Bind("Types", "portal", false).Value && scopeConfig.Bind("Remember", "portal", false).Value,
+        "legacy presets still apply Show object and Keep discovered selections from the map filters");
+    Check(scopeSize.Value == 35 && scopeNames.Value == 24 && scopeGroup.Value && !scopeHostile.Value && !scopeSharing.Value,
+        "preset loading preserves configurator sizes, text, grouping, creature relationships and sharing settings");
+    string cleanPresetJson = DataJson.Write(legacyScopedPreset);
+    Check(!cleanPresetJson.Contains("display") && !cleanPresetJson.Contains("hostile") && !cleanPresetJson.Contains("groupPlants") &&
+        cleanPresetJson.Contains("types"), "new preset serialization contains only its name and map filter choices");
+    var scopeStore = new FilterPresetStore(Path.Combine(filterScopeFolder, "presets.json"));
+    legacyScopedPreset.types["portal"].notify = true;
+    var notifiedTypes = new List<string>();
+    Action<IEnumerable<CatalogEntry>, bool> notifyScope = (entries, value) => { if (value) notifiedTypes.AddRange(entries.Select(e => e.key)); };
+    applyTypeFilters.Invoke(null, new object[] { new[] { scopeEntry }, legacyScopedPreset, notifyScope });
+    Check(notifiedTypes.SequenceEqual(new[] { "portal" }), "presets retain the per-type Notify checkbox available in the map filter window");
+    scopeStore.Save(legacyScopedPreset);
+    Check(scopeStore.Read().Single().types["portal"].selected && scopeStore.Read().Single().types["portal"].keep && scopeStore.Read().Single().types["portal"].notify == true,
+        "resaving a legacy preset retains filter selections while removing configurator data");
+    var migratedConfig = new BepInEx.Configuration.ConfigFile(Path.Combine(filterScopeFolder, "migrated.cfg"), false) { SaveOnConfigSet = false };
+    migratedConfig.Bind("Icons", "Minimap creature icon size", 27);
+    migratedConfig.Bind("Names", "Minimap name distance", 95);
+    migratedConfig.Bind("Maps", "Large map", false);
+    var migratedSize = ConfigSections.Bind(migratedConfig, "Icons", "Minimap", "Minimap creature icon size", 19, new BepInEx.Configuration.ConfigDescription(""));
+    var migratedDistance = ConfigSections.Bind(migratedConfig, "Names", "Minimap", "Minimap name distance", 70, new BepInEx.Configuration.ConfigDescription(""));
+    var migratedLargeMap = ConfigSections.Bind(migratedConfig, "Maps", "Large map", "Large map", true, new BepInEx.Configuration.ConfigDescription(""));
+    Check(migratedSize.Value == 27 && migratedDistance.Value == 95 && !migratedLargeMap.Value &&
+        !migratedConfig.Any(p => p.Key.Section == "Maps" || p.Key.Section == "Icons"),
+        "configuration section migration still preserves settings independently of filter presets");
 }
-finally { foreach (string path in Directory.GetFiles(displayTestFolder)) File.Delete(path); Directory.Delete(displayTestFolder); }
+finally { foreach (string file in Directory.GetFiles(filterScopeFolder)) File.Delete(file); Directory.Delete(filterScopeFolder); }
 
 var notificationRule = typeof(MarkerFile).Assembly.GetType("MapTracker.DiscoveryNotification").GetMethod("Allowed", lifetimeFlags);
 var notificationSample = new MarkerRecord { id = "new", type = "location:mine" };
@@ -531,15 +614,111 @@ Check(!Notify(true, true), "already collected resources do not generate discover
 notificationSample.collected = false; recordDynamic.SetValue(notificationSample, true);
 Check(!Notify(true, true), "temporary dynamic positions do not produce repeated static discovery notifications");
 var targetGesture = typeof(MarkerFile).Assembly.GetType("MapTracker.MapTargetGesture").GetMethod("Resolve", lifetimeFlags);
-string TargetAction(bool alt, bool left, bool hit, bool same = false, bool collapsed = false) =>
-    targetGesture.Invoke(null, new object[] { alt, left, hit, same, collapsed }).ToString();
-Check(TargetAction(true, true, true) == "Select", "Alt-left-click selects a precise map object as a navigation target");
+var navigationButton = typeof(MarkerFile).Assembly.GetType("MapTracker.MapTargetGesture").GetMethod("Matches", lifetimeFlags);
+bool ButtonMatches(BepInEx.Configuration.KeyboardShortcut shortcut, KeyCode button, params KeyCode[] held) =>
+    (bool)navigationButton.Invoke(null, new object[] { shortcut, button, (Func<KeyCode, bool>)(key => held.Contains(key)) });
+Check(ButtonMatches(new BepInEx.Configuration.KeyboardShortcut(KeyCode.Mouse2), KeyCode.Mouse2) &&
+    !ButtonMatches(new BepInEx.Configuration.KeyboardShortcut(KeyCode.Mouse2), KeyCode.Mouse0),
+    "middle-click navigation does not replace ordinary left-click map actions");
+Check(ButtonMatches(new BepInEx.Configuration.KeyboardShortcut(KeyCode.Mouse0, KeyCode.LeftAlt), KeyCode.Mouse0, KeyCode.LeftAlt) &&
+    !ButtonMatches(new BepInEx.Configuration.KeyboardShortcut(KeyCode.Mouse0, KeyCode.LeftAlt), KeyCode.Mouse0) &&
+    ButtonMatches(new BepInEx.Configuration.KeyboardShortcut(KeyCode.Mouse0, KeyCode.LeftAlt), KeyCode.Mouse0, KeyCode.RightAlt),
+    "rebinding to a mouse combination requires its modifier and can restore Alt-left-click selection");
+Check(ButtonMatches(new BepInEx.Configuration.KeyboardShortcut(KeyCode.G, KeyCode.LeftControl), KeyCode.G, KeyCode.LeftControl) &&
+    !ButtonMatches(new BepInEx.Configuration.KeyboardShortcut(KeyCode.None), KeyCode.None),
+    "keyboard navigation combinations are supported and an unbound selection key stays disabled");
+string navigationConfigFolder = Path.Combine(Path.GetTempPath(), "MapTrackerNavigationChecks-" + Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(navigationConfigFolder);
+try
+{
+    string configPath = Path.Combine(navigationConfigFolder, "navigation.cfg");
+    var config = new BepInEx.Configuration.ConfigFile(configPath, false);
+    var selectionKey = config.Bind("Navigation", "Select navigation key", new BepInEx.Configuration.KeyboardShortcut(KeyCode.Mouse2));
+    selectionKey.Value = new BepInEx.Configuration.KeyboardShortcut(KeyCode.Mouse0, KeyCode.LeftAlt);
+    config.Save();
+    var reloaded = new BepInEx.Configuration.ConfigFile(configPath, false);
+    var restoredKey = reloaded.Bind("Navigation", "Select navigation key", new BepInEx.Configuration.KeyboardShortcut(KeyCode.Mouse2));
+    Check(ButtonMatches(restoredKey.Value, KeyCode.Mouse0, KeyCode.LeftAlt) && !ButtonMatches(restoredKey.Value, KeyCode.Mouse2),
+        "changed navigation mouse button and modifier survive a configuration reload");
+}
+finally { foreach (string path in Directory.GetFiles(navigationConfigFolder)) File.Delete(path); Directory.Delete(navigationConfigFolder); }
+var sharedGoal = new NavigationShare { world = "123", name = "Portal: North", type = "prefab:portal_wood", objectId = "123:42", position = new Vector3(100, 20, -50) };
+var restoredSharedGoal = DataJson.Read<NavigationShare>(DataJson.Write(sharedGoal));
+Check(restoredSharedGoal.name == sharedGoal.name && restoredSharedGoal.type == sharedGoal.type && restoredSharedGoal.objectId == sharedGoal.objectId && restoredSharedGoal.position.x == 100 && restoredSharedGoal.position.z == -50,
+    "shared navigation packet preserves destination coordinates and label without Unity object references");
+var sharedGoalRule = typeof(MarkerFile).Assembly.GetType("MapTracker.NavigationShare").GetMethod("Allowed", lifetimeFlags);
+bool AllowedSharedGoal(NavigationShare goal, string world = "123", bool enabled = true, bool sharing = true) =>
+    (bool)sharedGoalRule.Invoke(null, new object[] { goal, world, enabled, sharing });
+Check(AllowedSharedGoal(restoredSharedGoal) && !AllowedSharedGoal(restoredSharedGoal, sharing: false) &&
+    !AllowedSharedGoal(restoredSharedGoal, enabled: false) && !AllowedSharedGoal(restoredSharedGoal, world: "other"),
+    "shared navigation respects sharing opt-in, enabled state and the current world");
+var oldSharedGoal = DataJson.Read<NavigationShare>("{\"schema\":1,\"world\":\"123\",\"name\":\"Goal\",\"position\":{\"x\":100,\"y\":0,\"z\":200}}");
+Check(oldSharedGoal.type == null && AllowedSharedGoal(oldSharedGoal), "earlier shared targets without icon metadata remain valid");
+sharedGoal.type = new string('x', 257);
+Check(!AllowedSharedGoal(sharedGoal), "shared icon metadata is bounded and cannot carry an oversized type identifier");
+sharedGoal.type = "prefab:portal_wood";
+sharedGoal.position.x = float.NaN;
+Check(!AllowedSharedGoal(sharedGoal), "invalid coordinates cannot create a shared destination");
+sharedGoal.position = new Vector3(20001, 0, 0);
+Check(!AllowedSharedGoal(sharedGoal), "shared navigation rejects destinations beyond world bounds");
+sharedGoal.position = Vector3.zero; sharedGoal.name = new string('x', 161);
+Check(!AllowedSharedGoal(sharedGoal), "shared destination labels have a bounded network size");
+bool incompleteGoalRejected = false;
+try { DataJson.Read<NavigationShare>("{\"schema\":1,\"world\":\"123\",\"name\":\"Goal\"}"); }
+catch (Newtonsoft.Json.JsonSerializationException) { incompleteGoalRejected = true; }
+Check(incompleteGoalRejected, "a malformed shared target cannot silently navigate to zero coordinates");
+var targetStateType = typeof(MarkerFile).Assembly.GetType("MapTracker.NavigationTargets");
+var findSharedObject = targetStateType.GetMethod("FindObject", lifetimeFlags);
+var goalObject = new MarkerRecord { id = "123:42", type = "prefab:portal_wood" };
+var goalObjects = new Dictionary<string, MarkerRecord> { [goalObject.id] = goalObject };
+Check(ReferenceEquals(findSharedObject.Invoke(null, new object[] { goalObjects, "123:42", "prefab:portal_wood" }), goalObject) &&
+    findSharedObject.Invoke(null, new object[] { goalObjects, "123:42", "creature:Leech" }) == null &&
+    findSharedObject.Invoke(null, new object[] { goalObjects, "missing", "prefab:portal_wood" }) == null,
+    "shared targets reuse the exact object marker without confusing different identities or types");
+var sameSharedPoint = targetStateType.GetMethod("SamePoint", lifetimeFlags);
+Check((bool)sameSharedPoint.Invoke(null, new object[] { new MarkerRecord { position = new Vector3(7, 0, 9) }, new MarkerRecord { position = new Vector3(7, 0, 9) } }) &&
+    !(bool)sameSharedPoint.Invoke(null, new object[] { new MarkerRecord { position = new Vector3(7, 0, 9) }, new MarkerRecord { position = new Vector3(70, 0, 90) } }),
+    "coincident personal and shared map points can use one mixed-color marker while different goals stay separate");
+var iconPolicy = typeof(MarkerFile).Assembly.GetType("MapTracker.NavigationTargetIcon").GetMethod("HasIcon", lifetimeFlags);
+bool GoalIcon(string category)
+{
+    var sample = new MarkerRecord(); recordEntry.SetValue(sample, new CatalogEntry { category = category });
+    return (bool)iconPolicy.Invoke(null, new object[] { sample });
+}
+Check(!GoalIcon("Navigation") && new[] { "Portals", "Plants and pickables", "Sap roots", "Locations", "Creatures", "Players" }.All(GoalIcon),
+    "empty map destinations omit caption icons while actual object categories retain theirs");
+var highlightRule = typeof(MarkerFile).Assembly.GetType("MapTracker.TargetHighlight").GetMethod("Tint", lifetimeFlags);
+Color PersonalTint = (Color)highlightRule.Invoke(null, new object[] { true, false });
+Color SharedTint = (Color)highlightRule.Invoke(null, new object[] { false, true });
+Color MixedTint = (Color)highlightRule.Invoke(null, new object[] { true, true });
+Check(PersonalTint.r > SharedTint.r && SharedTint.b > PersonalTint.b &&
+    Math.Abs(MixedTint.r - (PersonalTint.r + SharedTint.r) * 0.5f) < 0.001f &&
+    Math.Abs(MixedTint.b - (PersonalTint.b + SharedTint.b) * 0.5f) < 0.001f,
+    "personal, shared and coincident targets have three distinct highlight states");
+var targetState = Activator.CreateInstance(targetStateType, nonPublic: true);
+var personalField = targetStateType.GetField("Personal", recordFlags);
+var sharedField = targetStateType.GetField("Shared", recordFlags);
+var personalGoal = new MarkerRecord { id = "personal", position = new Vector3(7, 0, 9) };
+personalField.SetValue(targetState, personalGoal);
+targetStateType.GetMethod("SetShared", recordFlags).Invoke(targetState, new object[] { new Vector3(100, 0, 200), "Leech" });
+var receivedGoal = (MarkerRecord)sharedField.GetValue(targetState);
+Check(ReferenceEquals(personalField.GetValue(targetState), personalGoal) && receivedGoal.position.x == 100 && personalGoal.position.x == 7,
+    "receiving a shared destination preserves the existing personal target and its position");
+targetStateType.GetMethod("SetShared", recordFlags).Invoke(targetState, new object[] { new Vector3(300, 0, 400), "Mine" });
+Check(((MarkerRecord)sharedField.GetValue(targetState)).position.x == 300 && ReferenceEquals(personalField.GetValue(targetState), personalGoal),
+    "a new shared destination replaces only the shared slot");
+targetStateType.GetMethod("ClearShared", recordFlags).Invoke(targetState, null);
+Check(sharedField.GetValue(targetState) == null && ReferenceEquals(personalField.GetValue(targetState), personalGoal),
+    "cancelling the shared target leaves personal navigation active");
+string TargetAction(bool navigation, bool single, bool hit, bool same = false, bool collapsed = false) =>
+    targetGesture.Invoke(null, new object[] { navigation, single, hit, same, collapsed }).ToString();
+Check(TargetAction(true, true, true) == "Select", "Navigation-bound click selects a precise map object as a navigation target");
 Check(TargetAction(true, true, true, true) == "Clear" && TargetAction(true, true, false) == "Place",
-    "Alt-clicking the selected marker clears navigation while empty space places a destination");
+    "Clicking the selected marker clears navigation while empty space places a destination");
 Check(TargetAction(true, true, true, false, true) == "Expand" && TargetAction(true, true, true, false, false) == "Select",
-    "collapsed groups expand before Alt-click selects a real individual member");
+    "collapsed groups expand before the navigation button selects a real individual member");
 Check(TargetAction(true, false, true) == "Consume" && TargetAction(true, false, false) == "Consume",
-    "Alt-double/right-click is consumed without creating or deleting native pins");
+    "Double-click on the navigation-bound button is consumed without creating or deleting native pins");
 Check(TargetAction(false, true, true) == "None" && TargetAction(false, false, false) == "None",
     "ordinary map clicks retain the existing dungeon, group and native-pin behavior");
 var arrivalRule = typeof(MarkerFile).Assembly.GetType("MapTracker.NavigationArrival").GetMethod("Reached", lifetimeFlags);

@@ -30,8 +30,8 @@ namespace MapTracker
                 RectTransformUtility.RectangleContainsScreenPoint(map.m_mapImageLarge.rectTransform,
                     RectTransformUtility.WorldToScreenPoint(camera, r.pin.m_uiElement.position), camera)) candidates.Add(r);
             }
-            candidates.Sort((a, b) => MarkerPresentation.NameOrder(host.Tracking.Discoveries.IsTarget(a),
-                Tracking.NearbyNameDistance(a, origin), a.id, host.Tracking.Discoveries.IsTarget(b), Tracking.NearbyNameDistance(b, origin), b.id));
+            candidates.Sort((a, b) => MarkerPresentation.NameOrder(host.Tracking.Discoveries.IsNavigationTarget(a),
+                Tracking.NearbyNameDistance(a, origin), a.id, host.Tracking.Discoveries.IsNavigationTarget(b), Tracking.NearbyNameDistance(b, origin), b.id));
             boxes.Clear();
             boxes.Add(MarkerPresentation.PlayerArea(map, true, camera, scale));
             var viewport = MarkerPresentation.MapArea(map.m_mapImageLarge.rectTransform, camera);

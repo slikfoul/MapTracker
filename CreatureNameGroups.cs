@@ -22,7 +22,7 @@ namespace MapTracker
             foreach (var record in records)
             {
                 record.nameGroupMembers = null; record.nameGroupFollower = false;
-                if (!host.GroupCreatureNames.Value || record.entry?.creature != true || host.Tracking.Discoveries.IsTarget(record) ||
+                if (!host.GroupCreatureNames.Value || record.entry?.creature != true || host.Tracking.Discoveries.IsNavigationTarget(record) ||
                     record.pin?.m_uiElement == null || !record.pin.m_uiElement.gameObject.activeInHierarchy) continue;
                 eligible.Add(record); visible.Add(record);
             }

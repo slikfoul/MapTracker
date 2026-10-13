@@ -2,6 +2,21 @@ using MapTracker;
 static void Check(bool condition, string name)
 { if (!condition) throw new Exception(name); System.Console.WriteLine("PASS: " + name); }
 static bool[] Choose(params LabelBox[] boxes) => LabelLayout.Choose(boxes, 3);
+var tooltipArea = new LabelBox(0, 0, 1200, 800);
+var portalCloud = Enumerable.Range(0, 22).Select(i => new LabelBox(650 + i % 6 * 24, 300 + i / 6 * 25, 24, 24)).ToArray();
+bool NoCover(LabelBox panel, IEnumerable<LabelBox> boxes) => boxes.All(b => panel.X + panel.Width <= b.X || panel.X >= b.X + b.Width || panel.Y + panel.Height <= b.Y || panel.Y >= b.Y + b.Height);
+Check(GroupTooltipLayout.TryPlace(portalCloud, tooltipArea, 320, 348, 700, 350, 20, out var portalPopup) &&
+    portalPopup.X + portalPopup.Width < portalCloud.Min(p => p.X) && NoCover(portalPopup, portalCloud),
+    "the 22-portal group opens a panel to the left of every expanded member without covering icons");
+var edgeCloud = portalCloud.Select(p => new LabelBox(p.X - 620, p.Y, p.Width, p.Height)).ToArray();
+Check(GroupTooltipLayout.TryPlace(edgeCloud, tooltipArea, 320, 348, 80, 350, 20, out var edgePopup) &&
+    LabelLayout.Inside(edgePopup, tooltipArea) && NoCover(edgePopup, edgeCloud),
+    "near the left map edge the panel finds a free visible area instead of clamping over the group");
+var withLabels = portalCloud.Concat(new[] { new LabelBox(600, 278, 180, 20) }).ToArray();
+Check(GroupTooltipLayout.TryPlace(withLabels, tooltipArea, 320, 348, 700, 350, 20, out var labelledPopup) && NoCover(labelledPopup, withLabels),
+    "group popup placement also protects visible member names");
+Check(!GroupTooltipLayout.TryPlace(new[] { tooltipArea }, tooltipArea, 320, 348, 600, 400, 20, out _),
+    "when the entire viewport is occupied no popup is placed over protected objects");
 Check(Choose().Length == 0, "an empty minimap has no labels");
 Check(Choose(new(0, 0, 80, 14), new(100, 0, 80, 14)).All(v => v), "separated creature names remain visible");
 Check(Choose(new(0, 0, 80, 14), new(40, 3, 80, 14)).SequenceEqual(new[] { true, false }), "nearest-first priority hides a colliding name");

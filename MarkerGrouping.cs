@@ -43,6 +43,8 @@ namespace MapTracker
         private int previousCount = -1, previousMinimum, previousDistance;
         private Minimap.MapMode previousMode;
         private string selectedGroup;
+        private readonly List<LabelBox> tooltipObstacles = new List<LabelBox>();
+        private readonly Vector3[] tooltipCorners = new Vector3[4];
         internal void Invalidate() { nextBuild = 0; previousCount = -1; }
         internal void Toggle(MarkerRecord representative)
         {
@@ -60,7 +62,7 @@ namespace MapTracker
                 record.group = null; record.badge?.Hide();
                 var pin = record.pin;
                 if (pin?.m_uiElement == null || !pin.m_uiElement.gameObject.activeInHierarchy) continue;
-                if (record.favorite || host.Tracking.Discoveries.IsTarget(record) || !host.GroupMarkers.Value || (record.entry.creature && !host.GroupCreatures.Value)) continue;
+                if (record.favorite || host.Tracking.Discoveries.IsNavigationTarget(record) || !host.GroupMarkers.Value || (record.entry.creature && !host.GroupCreatures.Value)) continue;
                 if (BuiltInFilterPresets.IsPlantMarker(record.entry) && !host.GroupPlants.Value) continue;
                 eligible.Add(record);
                 visible.Add(record);
@@ -119,7 +121,7 @@ namespace MapTracker
                     member.pin.m_uiElement.gameObject.SetActive(false);
                     if (member.pin.m_NamePinData?.PinNameGameObject != null) member.pin.m_NamePinData.PinNameGameObject.SetActive(false);
                 }
-                Vector2 screen = RectTransformUtility.WorldToScreenPoint(null, representative.pin.m_uiElement.position);
+                Vector2 screen = RectTransformUtility.WorldToScreenPoint(camera, representative.pin.m_uiElement.position);
                 if (selectedGroup == representative.id && !host.Window.Open && map.m_mode == Minimap.MapMode.Large)
                 {
                     selectionVisible = true;
@@ -160,6 +162,8 @@ namespace MapTracker
                 wood.material = Resources.FindObjectsOfTypeAll<Material>().FirstOrDefault(m => m.name == "litpanel");
                 tooltipText = NativeMapText.Create("Text", tooltip.transform, map);
                 tooltipText.fontSize = 16; tooltipText.richText = false; tooltipText.raycastTarget = false;
+                tooltipText.enableAutoSizing = false; tooltipText.textWrappingMode = TextWrappingModes.NoWrap;
+                tooltipText.overflowMode = TextOverflowModes.Ellipsis;
                 tooltipText.color = new Color(1, 0.86f, 0.63f);
                 tooltipText.rectTransform.anchorMin = Vector2.zero; tooltipText.rectTransform.anchorMax = Vector2.one;
             tooltipText.rectTransform.offsetMin = new Vector2(18, 16); tooltipText.rectTransform.offsetMax = new Vector2(-18, -16);
@@ -173,12 +177,34 @@ namespace MapTracker
             rect.sizeDelta = new Vector2(320, 24 * (lines.Count + 1) + 36);
             rect.anchorMin = rect.anchorMax = rect.pivot = new Vector2(0.5f, 0.5f);
             RectTransform parentRect = parent as RectTransform;
-            if (parentRect != null && RectTransformUtility.ScreenPointToLocalPointInRectangle(parentRect, screen, null, out var local))
+            var canvas = parent.GetComponentInParent<Canvas>()?.rootCanvas;
+            Camera camera = canvas != null && canvas.renderMode != RenderMode.ScreenSpaceOverlay ? canvas.worldCamera : null;
+            if (parentRect != null && RectTransformUtility.ScreenPointToLocalPointInRectangle(parentRect, screen, camera, out var local))
             {
-                float halfWidth = rect.sizeDelta.x * 0.5f, halfHeight = rect.sizeDelta.y * 0.5f;
-                rect.anchoredPosition = new Vector2(Mathf.Clamp(local.x + halfWidth + 20, parentRect.rect.xMin + halfWidth, parentRect.rect.xMax - halfWidth),
-                    Mathf.Clamp(local.y, parentRect.rect.yMin + halfHeight, parentRect.rect.yMax - halfHeight));
+                tooltipObstacles.Clear();
+                foreach (var member in members)
+                {
+                    ProtectTooltip(member.pin?.m_uiElement, parentRect);
+                    ProtectTooltip(member.pin?.m_NamePinData?.PinNameRectTransform, parentRect);
+                }
+                var area = new LabelBox(parentRect.rect.xMin + 12, parentRect.rect.yMin + 12, parentRect.rect.width - 24, parentRect.rect.height - 24);
+                if (!GroupTooltipLayout.TryPlace(tooltipObstacles, area, rect.sizeDelta.x, rect.sizeDelta.y, local.x, local.y, 20, out var placed))
+                { tooltip.SetActive(false); return; }
+                rect.sizeDelta = new Vector2(placed.Width, placed.Height);
+                rect.anchoredPosition = new Vector2(placed.X + placed.Width * 0.5f, placed.Y + placed.Height * 0.5f) - parentRect.rect.center;
             }
+        }
+        private void ProtectTooltip(RectTransform element, RectTransform parent)
+        {
+            if (element == null || !element.gameObject.activeInHierarchy || (element.GetComponent<CanvasGroup>()?.alpha ?? 1) < 0.01f) return;
+            element.GetWorldCorners(tooltipCorners);
+            float minX = float.MaxValue, minY = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue;
+            foreach (var corner in tooltipCorners)
+            {
+                var point = parent.InverseTransformPoint(corner);
+                minX = Mathf.Min(minX, point.x); minY = Mathf.Min(minY, point.y); maxX = Mathf.Max(maxX, point.x); maxY = Mathf.Max(maxY, point.y);
+            }
+            tooltipObstacles.Add(new LabelBox(minX, minY, maxX - minX, maxY - minY));
         }
         public void Dispose()
         {

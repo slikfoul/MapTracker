@@ -15,8 +15,7 @@ MapTracker adds configurable markers for creatures, portals, dungeon entrances, 
 - Separate category visibility for the minimap and large map.
 - Discovery radius in whole meters, the full client-loaded area, or a line-of-sight mode using camera, obstacle and mist checks.
 - Optional grouping with separate plant and creature switches, screen/world size limits and exact member locations on click.
-- Built-in and custom presets that can be saved, loaded and deleted. New custom presets also store map presentation settings.
-- A **Discoveries** browser with search, persistent favorites and navigation targets.
+- Built-in and custom presets that can be saved, loaded and deleted. Presets store only map-filter choices.
 - Optional notifications for newly discovered dungeons and selected static object types.
 - Optional marker sharing between MapTracker clients.
 
@@ -26,7 +25,7 @@ MapTracker adds configurable markers for creatures, portals, dungeon entrances, 
 
 **Manual:** install BepInEx for Valheim, then copy the package's `BepInEx` folder into your Valheim game folder.
 
-An in-game BepInEx configuration manager is optional and useful for adjusting display, discovery and grouping settings. The object filters and discovery browser are available through MapTracker's own interface.
+An in-game BepInEx configuration manager is optional and useful for adjusting display, discovery and grouping settings. Object filters and presets are available through MapTracker's own interface.
 
 ## Getting started
 
@@ -35,7 +34,7 @@ An in-game BepInEx configuration manager is optional and useful for adjusting di
 3. Search for an object or choose a category. Enable **Show object** for the types you want to track.
 4. Enable **Keep discovered** for static types whose known locations should remain visible after you leave.
 
-The catalog search selects object types. **Discoveries** searches recorded locations, including portal tags.
+The catalog search selects object types across all categories.
 
 ## Creature markers
 
@@ -64,7 +63,7 @@ Line-of-sight detection uses camera, obstacle and mist checks, including mist-cl
 
 Enable general grouping and choose whether plants and creatures may group. Overlapping icons group automatically when zooming out and split when zooming in gives them room. **Maximum group span (m)** limits the full group span in the world, from 8 to 800 meters, default 400; it does not force separated screen icons into groups. Existing saved values are preserved. Counts appear in the center of each group icon, which stays anchored to a real object.
 
-For fewer repeated names, enable **Names → Group creature names**. Nearby creatures of the same type share one centered name and count, such as **Leech ×3**, while their marker positions stay unchanged. This works independently of icon grouping. **Creature name group radius (m)** controls the area, default 15 meters. The option is off by default and respects each map's name visibility setting; selected navigation targets retain their individual names.
+**Names → Group creature names** is enabled by default to reduce repeated names. Nearby creatures of the same type share one centered name and count, such as **Leech ×3**, while their marker positions stay unchanged. This works independently of icon grouping. **Creature name group radius (m)** controls the area, default 15 meters. Existing saved choices are preserved; use Reset to apply these defaults. The option respects each map's name visibility setting; selected navigation targets retain their individual names.
 
 Click a group on the large map to reveal its members at their actual locations. Click the group again or an empty map area to close it. Disable plant grouping when you want every plant shown separately.
 
@@ -74,40 +73,43 @@ Favorites and selected navigation targets remain individual markers.
 
 The built-in presets are **Default**, **Gathering**, **Exploration** and **Household**. Use **Presets** to load a set, save your current choices under a name or delete a set, including a built-in one.
 
-New custom presets store object selections, retention choices, creature relations and map presentation settings. Older presets remain readable and keep your current presentation settings. Presets do not change sharing permissions or disable the mod.
+Presets store only the per-type **Show object**, **Keep discovered** and **Notify** choices in the map filter window. Configuration manager preferences such as sizes, names, grouping, detection radius, creature relationships and sharing stay unchanged. Older presets remain readable; their old configuration preferences are ignored. Resaving an older preset removes those preferences from its stored data.
 
-## Discoveries and navigation
+## Navigation
 
-**Alt + left-click on the large map** to navigate to a MapTracker marker or any map location. Empty map space creates a temporary destination marker. Alt-click the selected object or destination marker again to stop navigation. Dungeon completion states remain unchanged.
+**Alt + left-click on the large map** to navigate to a MapTracker marker, public player or any map location. Empty map space creates a temporary destination marker. Repeat the gesture on the selected target to stop navigation. Right-click a target to cancel it. Change the selection button or keyboard combination in **Navigation → Select navigation key**; Alt + left-click is the default. Keyboard bindings work while pointing at the large map. Ordinary middle-click keeps the game's ping, and scrolling keeps map zoom. Alt + middle-click is reserved for shared navigation. Dungeon completion states remain unchanged.
 
-For a collapsed group, Alt-click reveals the members first; then Alt-click the particular object you want. Ordinary clicks retain their group and dungeon actions.
+For a collapsed group, Alt + left-click reveals the members first; then Alt + left-click the particular object you want. Ordinary clicks retain their group and dungeon actions.
 
-Open **Discoveries** from the filter window. Search by name, object type or portal tag, or enable **Favorites only**.
+Navigation shows straight-line distance and compass direction below the minimap or in the lower-left corner of the large map. Selecting a destination reveals that one remembered marker without enabling its whole object category.
 
-- **Fav:** toggle a persistent favorite.
-- **Map:** center the large map on the place and select it as a destination.
-- **Target:** select a destination without moving the map.
-- **Clear target:** stop navigation.
+A gold arrow at the top of the gameplay screen points toward the destination relative to the camera: up means ahead, down means behind, and left/right means turn that way. The destination icon, name and distance appear below the arrow. Portal and object icons use the game catalog, creatures use their trophy or custom head icons, and dungeon destinations use their entrance symbols. Empty map points show their name and distance without a caption icon. Actual object destinations show an icon for personal and shared navigation. It hides while the large map or menus are open. Toggle **Navigation → Show navigation arrow** to hide this HUD without clearing your map destination.
 
-Navigation shows straight-line distance and compass direction below the minimap or in the corner of the large map. Selecting a destination reveals that one remembered marker without enabling its whole object category.
-
-A gold arrow at the top of the gameplay screen points toward the destination relative to the camera: up means ahead, down means behind, and left/right means turn that way. The destination name and distance appear below the arrow. It hides while the large map or menus are open. Toggle **Navigation → Show navigation arrow** to hide this HUD without clearing your map destination.
-
-You can also Alt-click a player marker on the large map. The destination follows that player's public map position and updates the distance and arrow. Tracking stops if the player disconnects or hides their position; it also ends on arrival or cancellation. Player targets are temporary and use the game's existing player markers.
+You can also Alt + left-click a player marker on the large map. The destination follows that player's public map position and updates the distance and arrow. Tracking stops if the player disconnects or hides their position; it also ends on arrival or cancellation. Player targets are temporary and use the game's existing player markers.
 
 Navigation ends automatically when you come within **5 meters** of the destination. It does not finish while teleporting or inside a dungeon. Object destinations also account for height to avoid completing on the wrong floor; arbitrary map points use horizontal distance.
 
-Press **F10** to cancel navigation, or use **Clear target** in Discoveries. Change the key in **Navigation → Cancel navigation key** in the configuration manager. Cancellation is disabled while typing or using menus. The **Next preset** button cycles available presets.
+Press **F10** to cancel both personal and shared navigation. Right-click an individual target to cancel only that one. Change the key in **Navigation → Cancel navigation key** in the configuration manager. Cancellation is disabled while typing or using menus. Load presets from the **Preset** button in the map filter window.
 
 ## Notifications
 
-Notifications are disabled by default. Enable new-dungeon notifications in configuration, choose **Notify** for static types in the catalog, or use **Notify** in Discoveries.
+Notifications are disabled by default. Enable new-dungeon notifications in configuration, choose **Notify** for static types in the catalog.
 
 Notifications require an actual new local discovery. Previously saved places, creatures, loose dropped items and already collected resources do not produce static discovery notifications.
 
 ## Multiplayer
 
 Marker sharing is optional and disabled by default. Participating players need MapTracker installed. MapTracker sharing is separate from vanilla cartography-table pins; native/manual pins are not converted into MapTracker discoveries.
+
+**Sharing → Share discoveries** sends static discoveries to other MapTracker users in the same world. Received dungeons, ore, roots, plants and other static objects merge into the normal discovery set. Repeated packets and discoveries of the same object do not create another marker; nearby distinct objects remain separate. Local observations and local dungeon progress take priority.
+
+Enable **Sharing → Other player pins** to display received discoveries, then use your own **Show object** filters. **Keep discovered** retains static discoveries after the sender leaves or you restart. Fresh observations from a teammate can appear outside your detection radius, including another map zone. Receipt and storage do not depend on whether a type is currently displayed. Sending observes your detection distance or sight mode independently of display filters.
+
+**Sharing → Share creature positions** is disabled by default and requires Share discoveries. Enable it to transmit live creature positions, levels and relationships. Receiving uses Other player pins and your own creature filters. Creatures share network identity, so two players seeing the same creature produce one marker, with local observations taking priority. Moving creatures update at most twice per second; unchanged creatures use a periodic heartbeat. Live positions expire after updates stop and are not stored as permanent creature sightings. Received data is never automatically forwarded. This checkbox does not disable explicit shared navigation.
+
+Expanded group lists prefer space to the left of their members and avoid their icons and visible names. Near a map edge the list uses another free area; if none fits, it remains hidden while the expanded markers stay visible.
+
+With **Sharing → Share discoveries** enabled, **Alt + middle-click** any map location or object to share a navigation target. Both sender and recipients must enable Share discoveries and have shared navigation support. Personal navigation stays active. The shared HUD arrow is blue; when both destinations exist, the arrows sit side by side at the top center. Existing object markers are highlighted without a duplicate waypoint. Empty locations or objects not yet available to a recipient use a shared waypoint. Personal targets are orange, shared targets blue, and a target selected both ways uses their blended color. Only one shared destination is active at a time. Available object positions update the shared destination. Right-click its marker to cancel it; arrival also clears it. Shared destinations are temporary and are not forwarded automatically.
 
 ## Configuration and saved data
 

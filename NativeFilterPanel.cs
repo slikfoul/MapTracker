@@ -130,10 +130,6 @@ namespace MapTracker
             wood.material = panelMaterial; wood.color = Color.white; wood.raycastTarget = false;
             Text title = Label("MapTracker", panel, 34, Orange, TextAnchor.MiddleCenter, true);
             StretchTop(title.rectTransform, 70, 12, 70, 44);
-            var discoveriesButton = Button(panel, "Discoveries", OpenDiscoveries);
-            Pin((RectTransform)discoveriesButton.transform, new Vector2(0, 1), new Vector2(26, -20), new Vector2(150, 32));
-            var nextPresetButton = Button(panel, "Next preset", () => window.Host.Presets.Cycle());
-            Pin((RectTransform)nextPresetButton.transform, Vector2.one, new Vector2(-70, -20), new Vector2(150, 32));
             var drag = title.gameObject.AddComponent<FilterPanelDrag>(); drag.Target = panel;
             title.raycastTarget = true;
             summary = Label("", panel, 16, Beige, TextAnchor.MiddleCenter);
