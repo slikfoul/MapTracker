@@ -1,6 +1,6 @@
 # MapTracker
 
-Client-side Valheim map tracker for BepInEx and Harmony. Development preview **0.7.0**.
+Client-side Valheim map tracker for BepInEx and Harmony. Development preview **0.7.1**.
 
 MapTracker displays discovered objects and creatures on the native minimap and large map. It does not require Jotunn or a server plugin. Current builds are development previews; multiplayer sharing and performance on crowded maps still need in-game testing.
 
@@ -9,7 +9,7 @@ MapTracker displays discovered objects and creatures on the native minimap and l
 - Searchable object catalog built from the installed game and mods, with category filters and grouped prefab variants.
 - Per-type **Show object** and **Keep discovered** choices. Portals and dungeons are remembered by default; confirmed portal destruction removes its discovery, while leaving the area preserves it. Old portal locations within 32 m are rechecked against ready network areas; twelve seconds of continuous absence removes stale discoveries. Existing network portals are retained even outside the configured detection radius or camera view. Creature positions remain temporary.
 - Separate dungeon types, entrance icons, visited colors and click-to-toggle completion. Dungeon entrances retain a single discovery across network ID changes, preserving visited and completed states. Portal tags are displayed, and grouped portal names open on click.
-- Independent creature icon switches and size settings for each map. Trophy heads or relationship-colored dots, optional silhouette outlines with adjustable thickness, stars and group counts.
+- Independent creature icon switches and size settings for each map. Trophy heads without offset dots, or relationship-colored dots; optional silhouette outlines with adjustable thickness, stars and group counts.
 - Independent name visibility, minimap creature name distance and zoom-based large-map labels. Names stay anchored to their markers; the selected destination and nearby creatures have priority when labels collide. Large-map names are independent of character distance, and hover reveals suppressed names. Creature and object font sizes can be adjusted separately.
 - Optional radius-based grouping of same-species names into a centered caption and count, independent of icon grouping. Marker positions remain unchanged and selected destinations keep their own names.
 - Discovery radius: line of sight, whole meters, or the maximum client-loaded area. Sight detection checks the camera, obstacles and the game's mist visibility API, including demister effects.

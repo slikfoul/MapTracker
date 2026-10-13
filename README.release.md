@@ -41,6 +41,8 @@ The catalog search selects object types. **Discoveries** searches recorded locat
 
 Choose icons or dots independently for each map in the **Minimap** and **Large map** configuration sections. Icon sizes, solid black silhouette outline thickness, name visibility and minimap name distance are configurable. Set creature and other object font sizes separately under **Names**. Stars and group counts remain available in either mode.
 
+In icon mode, the center of the head marks the creature's position, with no offset relationship dot. The relationship colors below apply in dot mode.
+
 Creature names stay beside their own markers. On the minimap, names use the configured distance from your character. On the large map, names depend on zoom and available screen space, including faraway creatures when you zoom in on them. The selected destination takes priority; where names would overlap, the closest ones retain their labels and the others remain available on hover. Names disappear at distant map zoom, leaving markers, stars and counts.
 
 - **Red:** hostile creatures.

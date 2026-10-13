@@ -514,8 +514,7 @@ namespace MapTracker
                     pin.m_uiElement.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, size);
                     if (pin.m_iconElement != null) pin.m_iconElement.enabled = !showHead;
                     if (record.creatureIcon == null) record.creatureIcon = new CreatureMapIcon();
-                    record.creatureIcon.Update(pin.m_uiElement, sprite, pin.m_icon, size,
-                        record.shared ? SharedCreatureColor(record.creatureRelation) : CreatureColor(record.character), showHead, host.ContrastCreatureIcons.Value, host.CreatureOutlineThickness.Value);
+                    record.creatureIcon.Update(pin.m_uiElement, sprite, size, showHead, host.ContrastCreatureIcons.Value, host.CreatureOutlineThickness.Value);
                     if (record.stars == null) record.stars = new CreatureStars();
                     int starCount = record.shared ? record.creatureLevel - 1 : record.character != null ? record.character.GetLevel() - 1 : 0;
                     record.stars.Update(pin.m_uiElement, starCount, size);

@@ -10,7 +10,7 @@ namespace MapTracker
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "Slikfoul.MapTracker";
-        public const string Version = "0.7.0";
+        public const string Version = "0.7.1";
         internal static Plugin Instance;
         internal ConfigEntry<bool> Enabled, SmallMap, LargeMap, OtherPlayerPins;
         internal ConfigEntry<bool> Hostile, Friendly, Animals, Tamed;
@@ -59,7 +59,7 @@ namespace MapTracker
             MinimapCreatureIcons = ConfigSections.Bind(Config, "Icons", "Minimap", "Minimap creature icons", DefaultSettings.Value("Minimap", "Minimap creature icons", true),
                 new ConfigDescription("Use creature trophy icons on the minimap independently of the large map. Turn off to use relationship-colored dots; names, stars and group counts retain their own settings.", null,
                     new ConfigurationManagerAttributes { DispName = "Creature icons on minimap" }));
-            ContrastCreatureIcons = Bind("Icons", "Contrast creature icons", true, "Контрастные значки существ", "Add a solid black outline along each creature icon's transparent silhouette on both maps. No circular background, colored copies or clipping. Turn off for plain heads. Relationship-colored dots and stars remain. Applies when creature icons are enabled.");
+            ContrastCreatureIcons = Bind("Icons", "Contrast creature icons", true, "Контрастные значки существ", "Add a solid black outline along each creature icon's transparent silhouette on both maps. No circular background, colored copies or clipping. Turn off for plain heads. Stars remain; relationship colors apply in dot mode. Applies when creature icons are enabled.");
             CreatureOutlineThickness = Config.Bind("Icons", "Creature outline thickness", 1, new ConfigDescription("Thickness of the solid black outline along the icon silhouette, in whole UI pixels, on both maps. Requires Contrast creature icons and icon mode. The head itself keeps its chosen size.", new AcceptableValueRange<int>(1, 4)));
             MinimapCreatureIconSize = ConfigSections.Bind(Config, "Icons", "Minimap", "Minimap creature icon size", DefaultSettings.Value("Minimap", "Minimap creature icon size", 26), new ConfigDescription("Creature icon size on the minimap, in UI pixels. Applies to icon mode; colored dot sizes remain unchanged.", new AcceptableValueRange<int>(12, 48), new ConfigurationManagerAttributes { DispName = "Minimap creature icon size" }));
             LargeMapCreatureIconSize = ConfigSections.Bind(Config, "Icons", "Large map", "Large map creature icon size", DefaultSettings.Value("Large map", "Large map creature icon size", 30), new ConfigDescription("Creature icon size on the large map, in UI pixels. Applies at icon-visible zoom; distant colored dots remain unchanged.", new AcceptableValueRange<int>(12, 64), new ConfigurationManagerAttributes { DispName = "Large map creature icon size" }));

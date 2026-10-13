@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.1
+
+- Creature heads stand alone at their marker positions, with relationship colors retained in dot mode.
+
 ## 0.7.0
 
 - Optional radius-based grouping of same-species names into a centered caption, independent of icon grouping.

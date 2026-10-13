@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.7.0
+## 0.7.1
 
 - Creature and world-object tracking on Valheim's native minimap and large map.
 - Searchable categories with per-type display and discovery retention controls.
