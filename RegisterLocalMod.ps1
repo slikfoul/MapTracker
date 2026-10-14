@@ -79,7 +79,7 @@ $managerManifest = [ordered]@{
     manifestVersion = 1
     name = 'Slikfoul-MapTracker'
     authorName = 'Slikfoul'
-    websiteUrl = ''
+    websiteUrl = $manifest.website_url
     displayName = 'MapTracker'
     description = $manifest.description
     gameVersion = '0'
@@ -99,12 +99,13 @@ $managerManifest = [ordered]@{
 }
 [IO.File]::WriteAllText((Join-Path $stagingDirectory 'mm_v2_manifest.json'), ($managerManifest | ConvertTo-Json -Depth 8), (New-Object Text.UTF8Encoding $false))
 $description = $manifest.description.Replace("'", "''")
+$website = $manifest.website_url.Replace("'", "''")
 $enabledYaml = $enabled.ToString().ToLowerInvariant()
 $entry = @"
 - manifestVersion: 1
   name: Slikfoul-MapTracker
   authorName: Slikfoul
-  websiteUrl: ''
+  websiteUrl: '$website'
   displayName: MapTracker
   description: '$description'
   gameVersion: '0'

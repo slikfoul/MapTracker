@@ -51,7 +51,8 @@ namespace MapTracker
             var retained = new List<MarkerRecord>();
             foreach (var record in entrances)
             {
-                var survivor = retained.FirstOrDefault(r => SameEntrance(r, record.type, record.position, Legacy(record)));
+                if (!MarkerLifetime.Current(records, record)) { yield return 0; continue; }
+                var survivor = retained.FirstOrDefault(r => MarkerLifetime.Current(records, r) && SameEntrance(r, record.type, record.position, Legacy(record)));
                 if (survivor == null) { retained.Add(record); yield return 0; continue; }
                 survivor.visited |= record.visited;
                 survivor.completed |= record.completed;
@@ -59,7 +60,7 @@ namespace MapTracker
                 survivor.imported &= record.imported;
                 survivor.favorite |= record.favorite;
                 survivor.nameCache = null;
-                removePin(record); records.Remove(record.id); changed();
+                MarkerLifetime.Forget(records, record, removePin); changed();
                 yield return 0;
             }
         }

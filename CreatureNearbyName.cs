@@ -9,12 +9,14 @@ namespace MapTracker
     internal sealed class CreatureNearbyName : IDisposable
     {
         private TextMeshProUGUI text;
+        private readonly NativeNameVisibility visibility = new NativeNameVisibility();
         private string previousName;
         private int previousFontSize;
         private bool reportedEmpty;
         private static readonly Stack<TextMeshProUGUI> pool = new Stack<TextMeshProUGUI>();
         internal static void ClearPool() { while (pool.Count > 0) { var t = pool.Pop(); if (t != null) Object.Destroy(t.gameObject); } }
-        internal void Hide() { if (text != null) text.gameObject.SetActive(false); }
+        internal void Hide() { visibility.Apply(text != null ? text.gameObject : null, false); }
+        internal void SetVisible(bool show) { visibility.Apply(text != null ? text.gameObject : null, show); }
         internal void Show(RectTransform parent, Minimap map, string name, int fontSize, Vector2? center = null)
         {
             RectTransform labelParent = map.m_pinRootSmall;
@@ -82,6 +84,7 @@ namespace MapTracker
         }
         public void Dispose()
         {
+            visibility.Dispose();
             if (text != null) { text.gameObject.SetActive(false); if (pool.Count < 128) pool.Push(text); else Object.Destroy(text.gameObject); }
             text = null; previousName = null;
         }

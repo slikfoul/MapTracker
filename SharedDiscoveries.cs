@@ -26,10 +26,12 @@ namespace MapTracker
             record.remoteSeenUntil = record.remoteObservers.Count == 0 ? 0 : record.remoteObservers.Values.Max();
         }
         internal static void ObserveCreature(MarkerRecord record, MarkerRecord incoming, long peer, float now)
+            => RefreshCreatureObservation(record, incoming, peer, now, 15);
+        internal static void RefreshCreatureObservation(MarkerRecord record, MarkerRecord incoming, long peer, float now, int lifetime)
         {
             record.remoteCreaturePosition = incoming.position; record.remoteCreatureLevel = incoming.creatureLevel;
             record.remoteCreatureRelation = incoming.creatureRelation;
-            Observe(record, peer, true, now, 15);
+            Observe(record, peer, true, now, lifetime);
         }
         internal static bool HandOffCreature(MarkerRecord record, float now)
         {
@@ -73,15 +75,16 @@ namespace MapTracker
         internal static IEnumerable<byte> RemoveDuplicatesIncrementally(IDictionary<string, MarkerRecord> records,
             Action<MarkerRecord> removePin, Action changed, Action<SharedDiscoveryIndex> completed = null)
         {
-            var index = new SharedDiscoveryIndex(new MarkerRecord[0]);
+            var index = new SharedDiscoveryIndex(new MarkerRecord[0]) { CandidateIsCurrent = r => MarkerLifetime.Current(records, r) };
             foreach (var record in records.Values.Where(r => !r.dynamic && r.entry != null && !r.entry.creature)
                 .OrderBy(r => r.shared).ThenByDescending(r => r.live).ThenBy(r => r.id, StringComparer.Ordinal).ToList())
             {
+                if (!MarkerLifetime.Current(records, record)) { yield return 0; continue; }
                 var canonical = index.Find(record.type, record.position);
                 if (canonical == null) { index.Add(record); yield return 0; continue; }
                 if (canonical.shared == record.shared)
                 { canonical.visited |= record.visited; canonical.completed |= record.completed; canonical.collected |= record.collected; canonical.favorite |= record.favorite; }
-                canonical.nameCache = null; removePin(record); records.Remove(record.id); changed();
+                canonical.nameCache = null; MarkerLifetime.Forget(records, record, removePin); changed();
                 yield return 0;
             }
             completed?.Invoke(index);

@@ -53,7 +53,7 @@ Plant and creature icon grouping have separate switches. **Maximum group span (m
 
 Choose a discovery radius in whole meters, the full client-loaded area, or **Line of sight**. Sight detection accounts for the camera, obstacles and mist, including mist-clearing effects such as the wisplight.
 
-New discoveries come from objects loaded by your client. Remembered locations remain available according to your filters. Live creature and dropped-item positions are temporary.
+New discoveries come from objects loaded by your client. Remembered locations remain available according to your filters. Live creature and dropped-item positions are temporary. Discovery autosaves serialize and write a detached snapshot in the background, using atomic replacement and keeping the preceding save as a backup; live creature positions are excluded from these saves.
 
 Save, load or delete built-in and custom presets with **Presets**. The built-in sets are **Default**, **Gathering**, **Exploration** and **Household**. Presets store the filter window's **Show object**, **Keep discovered** and **Notify** choices. Configuration manager preferences remain independent.
 
@@ -70,15 +70,15 @@ Navigation pauses its arrival check while teleporting or inside a dungeon. Playe
 
 ## Share discoveries and destinations
 
-Sharing requires MapTracker **1.0.1 or later on every participating client**. The bounded sharing protocol does not exchange data with 1.0.0 clients. Update the participating clients together; existing local discoveries and filter settings are preserved.
+Sharing requires MapTracker **1.0.3 or later on every participating client**. The current capability protocol does not exchange data with 1.0.0-1.0.2 clients. Update the participating clients together; existing local discoveries and filter settings are preserved.
 
-Discovery sync runs in small acknowledged batches, sends changes instead of restarting the entire database on each presence check, and pauses when the game's outgoing connection is congested. Traffic is capped across all recipients; large discovery databases synchronize gradually in the background. **Share discoveries**, **Share creature positions** and **Other player pins** independently control static transmission, live-creature transmission and reception. When all three are off, MapTracker sends no data, handshakes or acknowledgements. Enabling reception alone uses small control messages to discover peers and acknowledge received packets; it does not forward discoveries.
+Discovery sync runs in small acknowledged batches, sends changes instead of restarting the entire database on each presence check, and pauses when the game's outgoing connection is congested. Traffic is capped across all recipients; large discovery databases synchronize gradually in the background. **Share discoveries** enables sending and receiving static discoveries; **Share creature positions** separately enables sending and receiving live creatures. Enable the corresponding setting on both clients. **Other player pins** only shows or hides ordinary player-created pins shared through the game's cartography table; it does not affect mod exchange or mod markers. When both Share settings are off, MapTracker sends no data, handshakes or acknowledgements, regardless of ordinary pin visibility.
 
-Participating players need MapTracker installed. Enable **Sharing → Share discoveries** to send static discoveries. Enable **Other player pins** to display received discoveries using your own filters.
+Participating players need MapTracker installed. Enable **Sharing → Share discoveries** on both clients to exchange static discoveries using your own display and retention filters. All remembered local discoveries are eligible; dungeons and portals are sent before other object types. Previously received retained discoveries are kept when sharing is disabled.
 
 Shared dungeons, ore, roots, plants and other static locations merge into your normal discovery set. Discovering the same object together produces one marker. **Keep discovered** retains received locations after the sender leaves or you restart. Fresh ally observations can appear in distant zones outside your own detection radius.
 
-**Share creature positions** separately enables live creature transmission and is **disabled by default**. Shared creatures use their network identity to avoid duplicate markers; local observations take priority. Live positions disappear when updates stop.
+**Share creature positions** enables sending and receiving live creatures, independently of static discoveries, and is **disabled by default**. Shared creatures use their network identity to avoid duplicate markers; local observations take priority. Live positions disappear when updates stop. Observation lifetimes adapt to the number of creatures and recipients within a 30-180-second limit, allowing crowded groups to synchronize under the traffic budget. This retains the last received position during delayed updates; it does not make remote movement instantaneous.
 
 With Share discoveries enabled, **Alt + middle-click** an object or any map location to send a shared navigation destination. Change this gesture with **Navigation → Share navigation key**. Your personal destination remains active alongside the blue shared destination. Targets are highlighted in gold, blue or a blended color when both selections match. Map summaries appear in the lower-left corner of the large map.
 

@@ -9,7 +9,7 @@ namespace MapTracker
         private DungeonGraphic graphic;
         internal void Update(Minimap.PinData pin, string prefab)
         {
-            if (graphic != null && graphic.transform.parent != pin.m_uiElement) UnityEngine.Object.Destroy(graphic.gameObject);
+            if (graphic != null && graphic.transform.parent != pin.m_uiElement) { UnityEngine.Object.Destroy(graphic.gameObject); graphic = null; }
             if (graphic == null)
             {
                 var root = new GameObject("DungeonEntranceIcon", typeof(RectTransform), typeof(CanvasRenderer), typeof(DungeonGraphic));

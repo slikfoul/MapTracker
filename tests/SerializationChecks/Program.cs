@@ -348,7 +348,7 @@ File.WriteAllText(radiusCheckPath, "[Internal]\nRadius slider revision = 1\n[Gen
 var oldZeroConfig = new BepInEx.Configuration.ConfigFile(radiusCheckPath, false) { SaveOnConfigSet = false };
 Check(((BepInEx.Configuration.ConfigEntry<int>)radiusBind.Invoke(null, new object[] { oldZeroConfig, null })).Value == 301,
     "a legacy zero still migrates to unlimited rather than opting the user into sight detection");
-if (args.Length > 0)
+if (args.Length > 0 && args[0] != "--save-benchmark")
 {
     var actualCatalog = DataJson.Read<CatalogDocument>(File.ReadAllText(args[0]));
     var actualChoices = ((System.Collections.IEnumerable)buildFilters.Invoke(null, new object[] { actualCatalog.entries, new Func<CatalogEntry, string>(e => e.name ?? e.prefab) })).Cast<object>().ToList();
@@ -446,7 +446,7 @@ try
         !DefaultSettings.Value("Types", "prefab:giant_brain_frac", true) &&
         DefaultSettings.Value("Types", "prefab:UnknownModdedCreature", true),
         "initial type exceptions preserve chosen skeleton remains while unknown mod types retain category defaults");
-    if (args.Length > 1)
+    if (args.Length > 1 && args[0] != "--save-benchmark")
     {
         var referenceConfig = new BepInEx.Configuration.ConfigFile(args[1], false) { SaveOnConfigSet = false };
         var referenceCatalog = DataJson.Read<CatalogDocument>(File.ReadAllText(args[0]));
@@ -902,3 +902,148 @@ Check(cleanupItems == 18001 && cleanupChanges == 1 && startupRecords.Count == 18
     "incremental startup reconciliation processes each record once and preserves merged completion state");
 Check(!cleanupSteps.MoveNext() && cleanupChanges == 1,
     "completed duplicate reconciliation cannot repeatedly remove or merge records");
+
+// Run the actual Tracking retirement path without constructing a Unity scene.
+// UI references stay null; real dictionary, working sets and spatial index are exercised.
+var trackingType = typeof(MarkerFile).Assembly.GetType("MapTracker.Tracking");
+var lifecycleTracking = System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(trackingType);
+var lifecycleRecords = new Dictionary<string, MarkerRecord>();
+trackingType.GetField("records", recordFlags).SetValue(lifecycleTracking, lifecycleRecords);
+var lifecycleSets = new Dictionary<string, HashSet<MarkerRecord>>();
+foreach (string setName in new[] { "pinnedRecords", "dynamicRecords", "liveRecords", "remoteStaticRecords", "pinChanges" })
+{
+    var set = new HashSet<MarkerRecord>(); lifecycleSets.Add(setName, set);
+    trackingType.GetField(setName, recordFlags).SetValue(lifecycleTracking, set);
+}
+var lifecycleReconciliationType = typeof(MarkerFile).Assembly.GetType("MapTracker.PortalReconciliation");
+trackingType.GetField("portalReconciliation", recordFlags).SetValue(lifecycleTracking,
+    Activator.CreateInstance(lifecycleReconciliationType, nonPublic: true));
+Action<MarkerRecord> retire = (Action<MarkerRecord>)trackingType.GetMethod("ForgetRecord", recordFlags)
+    .CreateDelegate(typeof(Action<MarkerRecord>), lifecycleTracking);
+var retiredCreature = SharedRecord("retirement:creature", mobEntry, Vector3.zero);
+recordDynamic.SetValue(retiredCreature, true);
+lifecycleRecords.Add(retiredCreature.id, retiredCreature);
+foreach (var set in lifecycleSets.Values) set.Add(retiredCreature);
+destroyedMethod.Invoke(null, new object[] { lifecycleRecords, retiredCreature.id, retire });
+Check(!lifecycleRecords.ContainsKey(retiredCreature.id) && lifecycleSets.Values.All(set => !set.Contains(retiredCreature)),
+    "confirmed creature destruction removes the actual Tracking dictionary and every active working set");
+retire(retiredCreature);
+Check(lifecycleRecords.Count == 0 && lifecycleSets.Values.All(set => set.Count == 0),
+    "delayed scan cleanup after destruction is idempotent and cannot throw a missing-key exception");
+var obsolete = SharedRecord("retirement:reused", sharedPortalEntry, new Vector3(100,0,100));
+var replacement = SharedRecord(obsolete.id, sharedPortalEntry, new Vector3(200,0,200));
+lifecycleRecords.Add(replacement.id, replacement);
+foreach (var set in lifecycleSets.Values) { set.Add(obsolete); set.Add(replacement); }
+retire(obsolete);
+Check(ReferenceEquals(lifecycleRecords[replacement.id], replacement) &&
+    lifecycleSets.Values.All(set => set.Contains(replacement) && !set.Contains(obsolete)),
+    "retiring an obsolete instance never removes a newer record under the same ID");
+var retireIndex = Activator.CreateInstance(indexType, recordFlags, null, new object[] { new[] { replacement } }, null);
+trackingType.GetField("discoveryIndex", recordFlags).SetValue(lifecycleTracking, retireIndex);
+var findNavigation = trackingType.GetMethod("FindNavigationObject", recordFlags);
+Check(ReferenceEquals(findNavigation.Invoke(lifecycleTracking, new object[] { "missing-id", replacement.type, (Vector3?)replacement.position }), replacement),
+    "shared object destinations resolve through the spatial index even when the original ID differs");
+Check(findNavigation.Invoke(lifecycleTracking, new object[] { null, null, (Vector3?)replacement.position }) == null &&
+    findNavigation.Invoke(lifecycleTracking, new object[] { "navigation:player", "navigation:player", (Vector3?)replacement.position }) == null,
+    "map-point and player destinations bypass discovery archive lookup");
+retire(replacement);
+Check(indexFind.Invoke(retireIndex, new object[] { replacement.type, replacement.position }) == null,
+    "retired records release their spatial index cells in the actual Tracking cleanup path");
+
+var betweenFrames = new Dictionary<string, MarkerRecord>();
+var removedAnchor = SharedRecord("a-anchor", sharedPortalEntry, new Vector3(50,0,50));
+var keptNeighbor = SharedRecord("b-neighbor", sharedPortalEntry, removedAnchor.position);
+betweenFrames.Add(removedAnchor.id, removedAnchor); betweenFrames.Add(keptNeighbor.id, keptNeighbor);
+int raceChanges = 0;
+var raceSteps = ((IEnumerable<byte>)incrementalCleanup.Invoke(null,
+    new object[] { betweenFrames, removePin, (Action)(() => raceChanges++), null })).GetEnumerator();
+raceSteps.MoveNext(); betweenFrames.Remove(removedAnchor.id);
+while (raceSteps.MoveNext()) { }
+raceSteps.Dispose();
+Check(betweenFrames.Count == 1 && betweenFrames.ContainsKey(keptNeighbor.id) && raceChanges == 0,
+    "a deduplication anchor retired between frames cannot cause a live neighbor to be deleted");
+var firstDungeon = SharedRecord("a-dungeon", mineEntry, new Vector3(70,0,70));
+var secondDungeon = SharedRecord("b-dungeon", mineEntry, firstDungeon.position);
+var dungeonRace = new Dictionary<string, MarkerRecord> { [firstDungeon.id] = firstDungeon, [secondDungeon.id] = secondDungeon };
+var dungeonSteps = ((IEnumerable<byte>)dungeonDiscoveries.GetMethod("RemoveDuplicatesIncrementally", lifetimeFlags)
+    .Invoke(null, new object[] { dungeonRace, removePin, (Action)(() => raceChanges++) })).GetEnumerator();
+dungeonSteps.MoveNext(); dungeonRace.Remove(firstDungeon.id);
+while (dungeonSteps.MoveNext()) { }
+dungeonSteps.Dispose();
+Check(dungeonRace.Count == 1 && dungeonRace.ContainsKey(secondDungeon.id) && raceChanges == 0,
+    "dungeon reconciliation also skips retired anchors between frame-budgeted steps");
+
+var filterPanelType = typeof(MarkerFile).Assembly.GetType("MapTracker.NativeFilterPanel");
+var releasedPanel = System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(filterPanelType);
+var panelLists = new List<System.Collections.IList>();
+foreach (var field in filterPanelType.GetFields(recordFlags))
+{
+    if (!field.FieldType.IsGenericType || field.FieldType.GetGenericTypeDefinition() != typeof(List<>)) continue;
+    var buffer = (System.Collections.IList)Activator.CreateInstance(field.FieldType);
+    var element = field.FieldType.GetGenericArguments()[0];
+    buffer.Add(element == typeof(bool) ? (object)true : element == typeof(string) ? "old-world" : null);
+    field.SetValue(releasedPanel, buffer); panelLists.Add(buffer);
+}
+filterPanelType.GetField("previousCount", recordFlags).SetValue(releasedPanel, 100);
+filterPanelType.GetField("categorySignature", recordFlags).SetValue(releasedPanel, "old-world");
+filterPanelType.GetMethod("Dispose", recordFlags).Invoke(releasedPanel, null);
+Check(panelLists.All(buffer => buffer.Count == 0) &&
+    (int)filterPanelType.GetField("previousCount", recordFlags).GetValue(releasedPanel) == -1 &&
+    filterPanelType.GetField("categorySignature", recordFlags).GetValue(releasedPanel) == null,
+    "world-exit UI cleanup releases filter, preset and discovery row caches before the next world rebuild");
+filterPanelType.GetMethod("Dispose", recordFlags).Invoke(releasedPanel, null);
+Check(panelLists.All(buffer => buffer.Count == 0), "repeated UI cleanup after leaving a world is safe");
+
+trackingType.GetField("secondaryDiscoveries", recordFlags).SetValue(lifecycleTracking, new List<MarkerRecord>());
+var bulkEntry=new CatalogEntry {key="prefab:archive-bulk",category="Destructibles"};
+for(int i=0;i<500;i++) {var item=SharedRecord("bulk:"+i,bulkEntry,new Vector3(i,0,0));lifecycleRecords.Add(item.id,item);}
+var distantDungeon=SharedRecord("priority:dungeon",mineEntry,new Vector3(10000,0,10000));
+var distantPortal=SharedRecord("priority:portal",sharedPortalEntry,new Vector3(-10000,0,-10000));
+lifecycleRecords.Add(distantDungeon.id,distantDungeon);lifecycleRecords.Add(distantPortal.id,distantPortal);
+var outboundArchive=(List<MarkerRecord>)trackingType.GetMethod("OwnDiscoveries",recordFlags).Invoke(lifecycleTracking,null);
+Check(outboundArchive.Count==502 && outboundArchive.Take(2).Contains(distantDungeon)&&outboundArchive.Take(2).Contains(distantPortal),
+    "all saved local discoveries remain eligible and distant saved dungeons/portals precede bulk archive objects");
+
+var saveType=typeof(MarkerFile).Assembly.GetType("MapTracker.DiscoverySave");
+var makeSnapshot=saveType.GetMethod("Snapshot",lifetimeFlags);
+var writeSnapshot=saveType.GetMethod("WriteAsync",lifetimeFlags);
+var savedRecord=SharedRecord("save-check",mineEntry,new Vector3(100,2,300));
+savedRecord.favorite=savedRecord.visited=savedRecord.completed=true;savedRecord.shared=true;savedRecord.sourcePeer=77;
+var transientRecord=SharedRecord("temporary-creature",mobEntry,Vector3.zero);recordDynamic.SetValue(transientRecord,true);
+var detached=(MarkerFile)makeSnapshot.Invoke(null,new object[]{"save-world","save-character",new[]{savedRecord,transientRecord}});
+savedRecord.position=new Vector3(900,0,900);savedRecord.completed=false;
+Check(detached.markers.Count==1 && detached.markers[0].position.x==100 && detached.markers[0].completed &&
+    detached.markers[0].favorite && detached.markers[0].sourcePeer==77 && recordEntry.GetValue(detached.markers[0])==null,
+    "background persistence uses detached plain-data snapshots, preserving states and excluding live creatures/Unity references");
+string workerFolder=Path.Combine(Environment.CurrentDirectory,"artifacts","MapTrackerSaveChecks-"+Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(workerFolder);
+try {
+    string destination=Path.Combine(workerFolder,"markers.json");
+    ((Task)writeSnapshot.Invoke(null,new object[]{destination,detached})).GetAwaiter().GetResult();
+    var persisted=DataJson.Read<MarkerFile>(File.ReadAllText(destination));
+    Check(persisted.world=="save-world"&&persisted.character=="save-character"&&persisted.markers.Single().completed,
+        "a completed background write persists the captured world and progress rather than later mutations");
+    Check(File.ReadAllText(destination)==DataJson.Write(detached,true),
+        "streamed background persistence preserves the established JSON format without a full JSON string allocation");
+    string originalSaved=File.ReadAllText(destination);
+    ((Task)writeSnapshot.Invoke(null,new object[]{destination,new MarkerFile{world="save-world",character="save-character"}})).GetAwaiter().GetResult();
+    Check(File.ReadAllText(destination+".bak")==originalSaved && DataJson.Read<MarkerFile>(File.ReadAllText(destination)).markers.Count==0,
+        "background writes replace atomically and preserve the preceding save as a backup");
+    string intact=File.ReadAllText(destination);Directory.CreateDirectory(destination+".tmp");bool workerFailed=false;
+    try{((Task)writeSnapshot.Invoke(null,new object[]{destination,detached})).GetAwaiter().GetResult();}catch(IOException){workerFailed=true;}catch(UnauthorizedAccessException){workerFailed=true;}
+    Check(workerFailed&&File.ReadAllText(destination)==intact,"failed background writes leave the previous discovery file intact");
+} finally { Directory.Delete(workerFolder,true); }
+if(args.Length==2&&args[0]=="--save-benchmark") {
+    var actual=DataJson.Read<MarkerFile>(File.ReadAllText(args[1]));
+    var watch=System.Diagnostics.Stopwatch.StartNew();
+    var actualSnapshot=(MarkerFile)makeSnapshot.Invoke(null,new object[]{actual.world,actual.character,actual.markers});
+    watch.Stop();double snapshotMs=watch.Elapsed.TotalMilliseconds;
+    long beforeAllocation=GC.GetAllocatedBytesForCurrentThread();
+    watch.Restart();string oldBlockingWork=DataJson.Write(actualSnapshot,true);watch.Stop();
+    double serializationMs=watch.Elapsed.TotalMilliseconds;long oldAllocation=GC.GetAllocatedBytesForCurrentThread()-beforeAllocation;
+    var streamedWrite=saveType.Assembly.GetType("MapTracker.DataJson").GetMethod("WriteTo",lifetimeFlags);
+    beforeAllocation=GC.GetAllocatedBytesForCurrentThread();watch.Restart();
+    streamedWrite.Invoke(null,new object[]{System.IO.TextWriter.Null,actualSnapshot});watch.Stop();
+    long streamAllocation=GC.GetAllocatedBytesForCurrentThread()-beforeAllocation;
+    System.Console.WriteLine($"SAVE BENCHMARK: records={actual.markers.Count}; snapshot={snapshotMs:0.00}ms; serialization={serializationMs:0.00}ms; chars={oldBlockingWork.Length}; oldAllocated={oldAllocation}; streamedAllocated={streamAllocation}; streamed={watch.Elapsed.TotalMilliseconds:0.00}ms. Managed benchmark, not Unity frame time; streaming sink excludes disk.");
+}

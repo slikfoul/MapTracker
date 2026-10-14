@@ -23,6 +23,7 @@ namespace MapTracker
     {
         private sealed class State { internal MarkerRecord Record; internal float Sent; }
         private readonly Dictionary<string, State> sent = new Dictionary<string, State>();
+        private readonly List<string> retired = new List<string>();
         private int cursor;
         internal List<MarkerRecord> Select(IReadOnlyList<MarkerRecord> records, float now, bool creatures)
         {
@@ -46,6 +47,13 @@ namespace MapTracker
             foreach (var record in records) sent[record.id] = new State { Record = Copy(record), Sent = now };
         }
         internal void Reset() { sent.Clear(); cursor = 0; }
+        internal void Prune(ISet<string> current)
+        {
+            retired.Clear();
+            foreach (var id in sent.Keys) if (!current.Contains(id)) retired.Add(id);
+            foreach (var id in retired) sent.Remove(id);
+            retired.Clear();
+        }
         internal static bool Equivalent(MarkerRecord a, MarkerRecord b, bool creatures)
         {
             float x = a.position.x - b.position.x, y = a.position.y - b.position.y, z = a.position.z - b.position.z;
@@ -65,8 +73,21 @@ namespace MapTracker
     {
         public int schema = 2, sequence;
         public string world, kind, session;
+        public int creatureLeaseSeconds;
         public List<MarkerRecord> markers;
         public NavigationShare target;
+    }
+    internal static class CreatureSharingLease
+    {
+        internal const int Minimum = 30, Maximum = 180;
+        internal static int Seconds(int creatures, int recipients)
+        {
+            // Reserve half the unchanged bandwidth budget for static data/acks.
+            // Allow one conservative full position-update cycle plus network jitter.
+            double rate = Math.Min(2048, 8192.0 / Math.Max(1, recipients));
+            return Math.Max(Minimum, Math.Min(Maximum, 15 + (int)Math.Ceiling(Math.Max(0, creatures) * 512.0 / rate)));
+        }
+        internal static int Clamp(int seconds) => Math.Max(Minimum, Math.Min(Maximum, seconds));
     }
     internal sealed class SharingPeer
     {
@@ -75,16 +96,17 @@ namespace MapTracker
         internal readonly SharingDelta Static = new SharingDelta(), Creatures = new SharingDelta();
         internal readonly SharingBudget Budget = new SharingBudget(2048, SharingBudget.PacketBytes + SharingBudget.EnvelopeBytes);
         internal SharingPacket Pending;
+        internal bool PendingSent;
         internal string PendingJson;
         internal NavigationShare Target;
         internal bool NextCreatures;
-        internal bool AcceptsDiscoveries, AcceptsTargets;
+        internal bool AcceptsDiscoveries, AcceptsCreatures, AcceptsTargets;
         internal string Session;
         internal bool Confirm(int sequence, float now)
         {
-            if (Pending == null || Pending.sequence != sequence) return false;
+            if (Pending == null || !PendingSent || Pending.sequence != sequence) return false;
             if (Pending.markers != null) (Pending.kind == "creatures" ? Creatures : Static).Commit(Pending.markers, now);
-            Pending = null; PendingJson = null; return true;
+            Pending = null; PendingJson = null; PendingSent = false; return true;
         }
     }
     internal sealed class SharingInbox

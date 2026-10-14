@@ -23,5 +23,6 @@ namespace MapTracker
             return true;
         }
         internal void Clear() => missing.Clear();
+        internal void Forget(string id) => missing.Remove(id);
     }
 }

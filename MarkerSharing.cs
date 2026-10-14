@@ -7,11 +7,12 @@ namespace MapTracker
 {
     internal sealed class MarkerSharing
     {
-        // Do not acknowledge v1 peers: their unbounded snapshots use the native reliable channel.
-        private const string Hello = "MapTracker.Discoveries.Hello.v2";
-        private const string Ack = "MapTracker.Discoveries.Ack.v2";
-        private const string Data = "MapTracker.Discoveries.Data.v2";
-        private const string Processed = "MapTracker.Discoveries.Processed.v2";
+        // v3 negotiates independent bidirectional static/creature channels.
+        // Older clients interpret these capabilities differently and must update together.
+        private const string Hello = "MapTracker.Discoveries.Hello.v3";
+        private const string Ack = "MapTracker.Discoveries.Ack.v3";
+        private const string Data = "MapTracker.Discoveries.Data.v3";
+        private const string Processed = "MapTracker.Discoveries.Processed.v3";
         private readonly Plugin host;
         private ZRoutedRpc rpc;
         private string world;
@@ -27,10 +28,11 @@ namespace MapTracker
         private string advertised;
         private string session = Guid.NewGuid().ToString("N");
         private List<MarkerRecord> discoveries = new List<MarkerRecord>(), creatures = new List<MarkerRecord>();
+        private readonly HashSet<string> currentCreatures = new HashSet<string>();
         private static SharingBudget NewBudget() => new SharingBudget(8192, SharingBudget.PacketBytes + SharingBudget.EnvelopeBytes);
         internal MarkerSharing(Plugin plugin) { host = plugin; }
-        private bool Interested => host.Enabled.Value && (host.ShareMarkers.Value || host.ShareCreatures.Value || host.OtherPlayerPins.Value);
-        private string Announcement => "2:" + world + ":" + session + ":" + (host.OtherPlayerPins.Value ? "1" : "0") + ":" + (host.ShareMarkers.Value ? "1" : "0");
+        private bool Interested => host.Enabled.Value && (host.ShareMarkers.Value || host.ShareCreatures.Value);
+        private string Announcement => "3:" + world + ":" + session + ":" + (host.ShareMarkers.Value ? "1" : "0") + ":" + (host.ShareCreatures.Value ? "1" : "0");
 
         internal void Tick()
         {
@@ -56,7 +58,12 @@ namespace MapTracker
             }
             if (!host.ShareCreatures.Value) { creatures.Clear(); foreach (var peer in peers.Values) peer.Creatures.Reset(); }
             else if (now >= nextCreatureSnapshot)
-            { creatures = host.Tracking.OwnCreatures(); nextCreatureSnapshot = now + 0.5f; }
+            {
+                creatures = host.Tracking.OwnCreatures(); nextCreatureSnapshot = now + 0.5f;
+                currentCreatures.Clear(); foreach (var creature in creatures) currentCreatures.Add(creature.id);
+                foreach (var peer in peers.Values) peer.Creatures.Prune(currentCreatures);
+            }
+            if (!host.ShareMarkers.Value) foreach (var peer in peers.Values) peer.Target = null;
             // Pause mod traffic rather than appending it behind native game synchronization.
             if (now < nextSend || Congested()) return;
             long controlPeer = 0; Control controlValue = null;
@@ -75,18 +82,23 @@ namespace MapTracker
             for (int i = 0, count = order.Count; i < count && order.Count > 0; i++)
             {
                 if (cursor >= order.Count) cursor = 0;
-                long id = order[cursor++]; var peer = peers[id];
+                long id = order[cursor++];
+                if (!peers.TryGetValue(id, out var peer)) { order.Remove(id); continue; }
                 if (now - peer.Seen > 90) { RemovePeer(id); continue; }
                 if (!peer.Budget.Allows(512, now) || !budget.Allows(512, now)) continue;
                 if (peer.Pending != null)
                 {
-                    if (peer.Pending.kind == "creatures" && !host.ShareCreatures.Value ||
-                        peer.Pending.kind == "discoveries" && !host.ShareMarkers.Value)
-                    { peer.Pending = null; peer.PendingJson = null; peer.Creatures.Reset(); }
+                    if (peer.Pending.kind == "creatures" && (!host.ShareCreatures.Value || !peer.AcceptsCreatures) ||
+                        (peer.Pending.kind == "discoveries" || peer.Pending.kind == "target") && (!host.ShareMarkers.Value || !peer.AcceptsDiscoveries))
+                    {
+                        if (peer.Pending.kind == "creatures") peer.Creatures.Reset();
+                        else if (peer.Pending.kind == "discoveries") peer.Static.Reset();
+                        peer.Pending = null; peer.PendingJson = null; peer.PendingSent = false;
+                    }
                     else
                     {
-                        if (now - peer.Attempt < 8) continue;
-                        if (Send(id, Data, peer.PendingJson, now, peer)) peer.Attempt = now;
+                        if (peer.PendingSent && now - peer.Attempt < 8) continue;
+                        if (Send(id, Data, peer.PendingJson, now, peer)) { peer.Attempt = now; peer.PendingSent = true; }
                         return;
                     }
                 }
@@ -94,20 +106,24 @@ namespace MapTracker
                 if (peer.Target != null && peer.AcceptsTargets) { packet.kind = "target"; packet.target = peer.Target; }
                 else
                 {
-                    if (!peer.AcceptsDiscoveries) continue;
-                    bool live = host.ShareCreatures.Value && peer.NextCreatures;
-                    if (!host.ShareMarkers.Value) live = true;
-                    if (!host.ShareMarkers.Value && !host.ShareCreatures.Value) continue;
+                    bool sendStatic = host.ShareMarkers.Value && peer.AcceptsDiscoveries;
+                    bool sendLive = host.ShareCreatures.Value && peer.AcceptsCreatures;
+                    if (!sendStatic && !sendLive) continue;
+                    bool live = sendLive && (!sendStatic || peer.NextCreatures);
                     peer.NextCreatures = !peer.NextCreatures;
                     packet.markers = (live ? peer.Creatures : peer.Static).Select(live ? creatures : discoveries, now, live);
                     if (packet.markers.Count == 0) continue;
                     packet.kind = live ? "creatures" : "discoveries";
+                    if (live) packet.creatureLeaseSeconds = CreatureSharingLease.Seconds(creatures.Count, peers.Count);
                 }
                 string json = DataJson.WriteNetwork(packet);
                 while (Encoding.UTF8.GetByteCount(json) > SharingBudget.PacketBytes && packet.markers?.Count > 1)
                 { packet.markers.RemoveAt(packet.markers.Count - 1); json = DataJson.WriteNetwork(packet); }
-                if (Encoding.UTF8.GetByteCount(json) > SharingBudget.PacketBytes || !Send(id, Data, json, now, peer)) continue;
-                peer.Pending = packet; peer.PendingJson = json; peer.Attempt = now;
+                if (Encoding.UTF8.GetByteCount(json) > SharingBudget.PacketBytes) continue;
+                // Retain selected records until bandwidth is available. Advancing the
+                // selection cursor on an unsuccessful send could starve the same IDs.
+                peer.Pending = packet; peer.PendingJson = json; peer.PendingSent = false;
+                if (Send(id, Data, json, now, peer)) { peer.Attempt = now; peer.PendingSent = true; }
                 peer.NextSequence++;
                 if (packet.kind == "target") peer.Target = null;
                 return;
@@ -132,7 +148,7 @@ namespace MapTracker
             if (!Interested || Player.m_localPlayer == null || sender == ZNet.GetUID() || world == null ||
                 announcement == null || announcement.Length > 80) return false;
             var parts = announcement.Split(':');
-            return parts.Length == 5 && parts[0] == "2" && parts[1] == world && Guid.TryParseExact(parts[2], "N", out _) &&
+            return parts.Length == 5 && parts[0] == "3" && parts[1] == world && Guid.TryParseExact(parts[2], "N", out _) &&
                 (parts[3] == "0" || parts[3] == "1") && (parts[4] == "0" || parts[4] == "1");
         }
         private void Remember(long sender, string announcement)
@@ -145,9 +161,13 @@ namespace MapTracker
                 peers.Add(sender, peer = new SharingPeer()); order.Add(sender);
             }
             peer.Session = remoteSession;
-            bool receives = announcement[announcement.Length - 3] == '1';
-            if (receives && !peer.AcceptsDiscoveries) { peer.Static.Reset(); peer.Creatures.Reset(); }
-            peer.AcceptsDiscoveries = receives; peer.AcceptsTargets = announcement[announcement.Length - 1] == '1';
+            bool receivesStatic = announcement[announcement.Length - 3] == '1';
+            bool receivesCreatures = announcement[announcement.Length - 1] == '1';
+            if (receivesStatic && !peer.AcceptsDiscoveries) peer.Static.Reset();
+            if (receivesCreatures && !peer.AcceptsCreatures) peer.Creatures.Reset();
+            peer.AcceptsDiscoveries = peer.AcceptsTargets = receivesStatic;
+            peer.AcceptsCreatures = receivesCreatures;
+            if (!receivesStatic) peer.Target = null;
             // Presence refreshes never invalidate acknowledged deltas.
             peer.Seen = Time.realtimeSinceStartup;
         }
@@ -204,11 +224,12 @@ namespace MapTracker
                     {
                         if (packet.markers == null || packet.markers.Count > 8 ||
                             (packet.kind != "discoveries" && packet.kind != "creatures")) return;
-                        if (host.OtherPlayerPins.Value)
-                        {
-                            if (packet.kind == "discoveries") host.Tracking.ReceiveDiscoveries(item.Peer, packet.markers);
-                            else host.Tracking.ReceiveCreatures(item.Peer, packet.markers);
-                        }
+                        if (packet.kind == "creatures" && (packet.creatureLeaseSeconds < CreatureSharingLease.Minimum ||
+                            packet.creatureLeaseSeconds > CreatureSharingLease.Maximum)) return;
+                        if (packet.kind == "discoveries" && host.ShareMarkers.Value)
+                            host.Tracking.ReceiveDiscoveries(item.Peer, packet.markers);
+                        else if (packet.kind == "creatures" && host.ShareCreatures.Value)
+                            host.Tracking.ReceiveCreatures(item.Peer, packet.markers, packet.creatureLeaseSeconds);
                     }
                     peer.LastReceived = packet.sequence;
                 }
@@ -221,6 +242,7 @@ namespace MapTracker
         {
             world = null; active = false; peers.Clear(); order.Clear(); controls.Clear(); inbox.Clear();
             discoveries.Clear(); creatures.Clear(); cursor = 0; budget = NewBudget();
+            currentCreatures.Clear();
             session = Guid.NewGuid().ToString("N"); advertised = null; nextHello = nextSnapshot = nextCreatureSnapshot = nextSend = nextTargetSend = 0;
         }
     }

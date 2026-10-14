@@ -12,7 +12,7 @@ namespace MapTracker
         internal void Update(RectTransform parent, int count, float pointSize)
         {
             count = Mathf.Clamp(count, 0, 2);
-            if (root != null && root.parent != parent) Object.Destroy(root.gameObject);
+            if (root != null && root.parent != parent) { Object.Destroy(root.gameObject); root = null; }
             if (count == 0)
             {
                 if (root != null) root.gameObject.SetActive(false);

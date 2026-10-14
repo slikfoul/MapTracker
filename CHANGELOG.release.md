@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.0.3
+
+- Independent bidirectional discovery and creature-sharing channels.
+- Ordinary player-pin visibility remains separate from mod exchange and mod markers.
+- Saved dungeons and portals receive priority during initial discovery synchronization.
+- Bandwidth-aware creature observation lifetimes during crowded multiplayer synchronization.
+- Pending updates remain queued until outbound bandwidth is available.
+- Background streamed discovery saves with atomic replacement and previous-save backups.
+
+## 1.0.2
+
+- Consistent marker retirement across object destruction, remote expiry and saved-discovery reconciliation.
+- Spatially indexed shared navigation target lookup.
+- Immediate cancellation of queued and retried shared destinations when discovery sharing is disabled.
+- Current-creature-only transmission caches and stable minimap label visibility.
+- Fresh filter, preset and discovery panels when entering a new world.
+
 ## 1.0.1
 
 - Bandwidth-limited discovery synchronization with acknowledged batches, delta updates and native-connection congestion awareness.

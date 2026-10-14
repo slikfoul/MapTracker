@@ -58,7 +58,7 @@ static class Checks
         }
     }
     static MarkerRecord Record(int i) => new() {id="123:"+i,type="portal_wood",position=new Vector3(i,0,i),portalTag="Portal "+i};
-    static bool IsData(Sent s) => s.Method=="MapTracker.Discoveries.Data.v2";
+    static bool IsData(Sent s) => s.Method=="MapTracker.Discoveries.Data.v3";
     static void Main()
     {
         var loading = new Network(2);
@@ -70,15 +70,19 @@ static class Checks
         loading.Run(5);
         Check(loading.Clients[1].Host.Tracking.Received.ContainsKey("123:1"), "sharing starts normally after saved markers finish preparing");
         var off=new Network(2);
-        foreach(var c in off.Clients){c.Host.ShareMarkers.Value=false;c.Host.OtherPlayerPins.Value=false;}
+        foreach(var c in off.Clients){c.Host.ShareMarkers.Value=false;c.Host.ShareCreatures.Value=false;c.Host.OtherPlayerPins.Value=true;}
         off.Run(90);
-        Check(off.Sent.Count==0,"sharing and received pins off produce zero network messages, including handshakes");
+        Check(off.Sent.Count==0,"both Share channels off produce zero mod traffic even when ordinary game pins are enabled");
         off.Clients[0].Context();off.Clients[0].Rpc.InvokeRoutedRPC(0,"MapTracker.Discoveries.Hello.v1","1:123");
         off.Run(1);
         Check(off.Sent.Count==1,"legacy v1 handshakes never trigger unbounded discovery traffic");
+        off.Clients[0].Context();off.Clients[0].Rpc.InvokeRoutedRPC(0,"MapTracker.Discoveries.Hello.v2","2:123");
+        off.Run(1);
+        Check(off.Sent.Count==2,"legacy v2 capability handshakes cannot enable incompatible sharing");
         var creaturesOnly=new Network(2);
         creaturesOnly.Clients[0].Host.ShareMarkers.Value=false;
         creaturesOnly.Clients[0].Host.ShareCreatures.Value=true;
+        creaturesOnly.Clients[1].Host.ShareCreatures.Value=true;
         creaturesOnly.Clients[0].Host.Tracking.Creatures.Add(new MarkerRecord {id="mob:1",type="leech",creatureLevel=1,creatureRelation=1});
         creaturesOnly.Clients[0].Host.Tracking.Static.Add(Record(1));
         creaturesOnly.Run(5);
@@ -111,13 +115,13 @@ static class Checks
 
         var retries=new Network(2); int lost=0;
         retries.Clients[0].Host.Tracking.Static=Enumerable.Range(0,24).Select(Record).ToList();
-        retries.Drop=s=>s.Method.EndsWith("Processed.v2") && lost++<3;
+        retries.Drop=s=>s.Method.EndsWith("Processed.v3") && lost++<3;
         retries.Run(45);
         Check(retries.Clients[1].Host.Tracking.Received.Count==24 && retries.Clients[1].Host.Tracking.Applied==24,"lost acknowledgements retry identical packets without applying duplicates");
 
         var blocked=new Network(3);
         blocked.Clients[0].Host.Tracking.Static=Enumerable.Range(0,1000).Select(Record).ToList();
-        blocked.Drop=s=>s.Source==2 && s.Method.EndsWith("Processed.v2");
+        blocked.Drop=s=>s.Source==2 && s.Method.EndsWith("Processed.v3");
         blocked.Run(40);
         Check(blocked.Sent.Count(s=>IsData(s)&&s.Source==1&&s.Destination==2)<=6,"an unresponsive receiver is limited to one pending packet and slow retries");
         Check(blocked.Clients[2].Host.Tracking.Received.Count>100,"a stalled receiver does not block discovery sync to other players");
@@ -146,11 +150,14 @@ static class Checks
         var navigation=new Network(2);
         foreach(var c in navigation.Clients)c.Host.OtherPlayerPins.Value=false;
         navigation.Clients[0].Host.Tracking.Static.Add(Record(1));
-        navigation.Run(3);Check(!navigation.Sent.Any(IsData),"peers which disable received pins are not sent automatic discoveries");
+        navigation.Run(3);Check(navigation.Clients[1].Host.Tracking.Received.Count==1,
+            "saved discoveries arrive with Other player pins disabled at both clients");
         navigation.Clients[0].Context();navigation.Clients[0].Sharing.SendNavigationTarget(new Vector3(12,0,42),"Portal","portal_wood","123:1");
         navigation.Run(3);Check(navigation.Clients[1].Host.Tracking.Discoveries.Targets==1,"explicit shared navigation works independently of received discovery pins");
         navigation.Clients[1].Host.OtherPlayerPins.Value=true;
-        navigation.Run(5);Check(navigation.Clients[1].Host.Tracking.Received.Count==1,"enabling reception renegotiates capabilities and receives retained discoveries");
+        int dataBeforePinToggle=navigation.Sent.Count(IsData);
+        navigation.Run(5);Check(navigation.Clients[1].Host.Tracking.Received.Count==1 && navigation.Sent.Count(IsData)==dataBeforePinToggle,
+            "toggling ordinary pin visibility neither restarts discovery transmission nor changes reception");
 
         var inbox=new SharingInbox();
         Check(!inbox.Enqueue(1,new string('界',1400)),"multibyte messages are bounded by bytes rather than only character count");
@@ -197,17 +204,76 @@ static class Checks
         disconnect.Run(80);
         Check(disconnect.Clients[1].Host.Tracking.Received.Count==80,"a receiver returning after peer expiry resumes complete discovery synchronization");
 
-        var asymmetric=new Network(3);
-        asymmetric.Clients[0].Host.ShareMarkers.Value=true; asymmetric.Clients[0].Host.OtherPlayerPins.Value=false;
-        asymmetric.Clients[0].Host.Tracking.Static=Enumerable.Range(0,16).Select(Record).ToList();
-        asymmetric.Clients[1].Host.ShareMarkers.Value=false; asymmetric.Clients[1].Host.ShareCreatures.Value=false;
-        asymmetric.Clients[1].Host.OtherPlayerPins.Value=true; asymmetric.Clients[1].Host.Tracking.Static.Add(Record(1000));
-        asymmetric.Clients[2].Host.ShareMarkers.Value=false; asymmetric.Clients[2].Host.OtherPlayerPins.Value=false;
-        asymmetric.Run(15);
-        Check(asymmetric.Clients[1].Host.Tracking.Received.Count==16 && asymmetric.Clients[0].Host.Tracking.Received.Count==0,
-            "send-only and receive-only clients exchange discoveries without reversing disabled directions");
-        Check(!asymmetric.Sent.Any(s=>s.Source==3) && !asymmetric.Sent.Any(s=>s.Source==2&&IsData(s)),
-            "the disabled client sends nothing and the receive-only client sends no discovery payloads");
+        // Exercise every independent pair of static/live channels with ordinary pins hidden.
+        for(int a=0;a<4;a++) for(int b=0;b<4;b++) {
+            var matrix=new Network(2); int[] modes={a,b};
+            for(int i=0;i<2;i++) {
+                var client=matrix.Clients[i];client.Host.OtherPlayerPins.Value=false;
+                client.Host.ShareMarkers.Value=(modes[i]&1)!=0;client.Host.ShareCreatures.Value=(modes[i]&2)!=0;
+                client.Host.Tracking.Static.Add(Record(i+1));
+                client.Host.Tracking.Creatures.Add(new MarkerRecord{id="matrix-mob:"+i,type="leech",creatureLevel=1,creatureRelation=1});
+            }
+            matrix.Run(5);
+            bool staticExchange=(a&1)!=0&&(b&1)!=0, creatureExchange=(a&2)!=0&&(b&2)!=0;
+            Check(matrix.Clients[0].Host.Tracking.Received.ContainsKey("123:2")==staticExchange &&
+                  matrix.Clients[1].Host.Tracking.Received.ContainsKey("123:1")==staticExchange &&
+                  matrix.Clients[0].Host.Tracking.Received.ContainsKey("matrix-mob:1")==creatureExchange &&
+                  matrix.Clients[1].Host.Tracking.Received.ContainsKey("matrix-mob:0")==creatureExchange,
+                  "independent bidirectional channel matrix "+a+"/"+b+" ignores ordinary pin visibility");
+        }
+
+        var queuedTarget = new Network(2);
+        queuedTarget.Run(2); queuedTarget.Clients[0].Context();
+        queuedTarget.Clients[0].Sharing.SendNavigationTarget(new Vector3(10,0,20), "Queued target");
+        queuedTarget.Clients[0].Host.ShareMarkers.Value = false;
+        foreach(var client in queuedTarget.Clients)client.Host.ShareCreatures.Value=true;
+        queuedTarget.Run(12);
+        Check(!queuedTarget.Sent.Any(s => s.Source==1 && IsData(s)),
+            "turning off Share discoveries cancels an unsent shared target while the creature channel stays enabled");
+        var retryTarget = new Network(2);
+        retryTarget.Drop = s => s.Method=="MapTracker.Discoveries.Processed.v3";
+        retryTarget.Run(2); retryTarget.Clients[0].Context();
+        retryTarget.Clients[0].Sharing.SendNavigationTarget(new Vector3(10,0,20), "Pending target");
+        retryTarget.Run(1);
+        int targetPackets = retryTarget.Sent.Count(s => s.Source==1 && IsData(s));
+        Check(targetPackets == 1, "an unacknowledged target is pending before cancellation");
+        retryTarget.Clients[0].Host.ShareMarkers.Value = false;
+        foreach(var client in retryTarget.Clients)client.Host.ShareCreatures.Value=true;
+        retryTarget.Run(20);
+        Check(retryTarget.Sent.Count(s => s.Source==1 && IsData(s)) == targetPackets,
+            "turning off Share discoveries cancels target retries without disabling creature exchange");
+        var deltaCache = new SharingDelta();
+        deltaCache.Commit(Enumerable.Range(0,10000).Select(Record).ToArray(), 0);
+        deltaCache.Prune(new HashSet<string> { "123:1", "123:2" });
+        var sentField = typeof(SharingDelta).GetField("sent", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        Check(((System.Collections.IDictionary)sentField.GetValue(deltaCache)).Count == 2,
+            "retired creature delta entries are released instead of accumulating for the entire session");
+        deltaCache.Prune(new HashSet<string>());
+        Check(((System.Collections.IDictionary)sentField.GetValue(deltaCache)).Count == 0,
+            "an empty creature snapshot releases all acknowledged creature cache entries");
+        var dense=new Network(2);
+        foreach(var client in dense.Clients){client.Host.ShareCreatures.Value=true;client.Host.OtherPlayerPins.Value=false;}
+        dense.Clients[0].Host.Tracking.Static=Enumerable.Range(0,10000).Select(Record).ToList();
+        dense.Clients[0].Host.Tracking.Creatures=Enumerable.Range(0,300).Select(i=>new MarkerRecord{id="dense:"+i,type="leech",creatureLevel=1,creatureRelation=1}).ToList();
+        dense.Run(180,t=>{foreach(var creature in dense.Clients[0].Host.Tracking.Creatures)creature.position=new Vector3(t,0,0);});
+        var denseReceiver=dense.Clients[1].Host.Tracking;
+        Check(denseReceiver.CreatureUntil.Count==300,"all creatures reach a distant client while a large discovery database is synchronizing");
+        Check(denseReceiver.SimulatedOldFlickers>0 && denseReceiver.CreatureFlickers==0,
+            "the crowded transfer reproduces fifteen-second flicker and avoids it with a budget-aware lease");
+        foreach(var client in dense.Clients)client.Host.ShareCreatures.Value=false;
+        dense.Run(CreatureSharingLease.Maximum+1);
+        Check(denseReceiver.CreatureUntil.Values.All(until=>until<dense.Now),
+            "creature observations still expire after transmission stops; leases cannot retain them indefinitely");
+        Check(CreatureSharingLease.Seconds(1000000,32)==CreatureSharingLease.Maximum && CreatureSharingLease.Seconds(0,1)==CreatureSharingLease.Minimum,
+            "adaptive creature lifetime remains bounded under extreme counts");
+        var unsent=new SharingPeer { Pending=new SharingPacket { sequence=4,kind="discoveries",markers=new List<MarkerRecord>{Record(4)} } };
+        Check(!unsent.Confirm(4,1)&&unsent.Pending!=null,
+            "an acknowledgement cannot commit or discard a packet still waiting for outbound bandwidth");
+        unsent.PendingSent=true;
+        Check(unsent.Confirm(4,1)&&unsent.Pending==null&&!unsent.PendingSent,
+            "a delivered pending packet is committed once and releases the send queue");
+        foreach(var client in dense.Clients)Check(dense.Sent.Where(s=>s.Source==client.Net.Id).Sum(s=>s.Bytes)<=dense.Now*8192+4224,
+            "dense moving-creature and archive synchronization stays inside the unchanged traffic cap for client "+client.Net.Id);
         System.Console.WriteLine("Sharing transport checks passed: "+passed);
     }
 }

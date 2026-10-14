@@ -60,12 +60,24 @@ namespace MapTracker
         internal List<MarkerRecord> Static = new(), Creatures = new();
         internal Dictionary<string,MarkerRecord> Received = new();
         internal int Applied;
+        internal Dictionary<string,float> CreatureUntil = new();
+        internal int CreatureFlickers, SimulatedOldFlickers;
+        private Dictionary<string,float> oldUntil = new();
         internal FakeDiscoveries Discoveries = new();
         internal List<MarkerRecord> OwnDiscoveries() => new(Static);
         internal List<MarkerRecord> OwnCreatures() => new(Creatures);
         internal void ReceiveDiscoveries(long peer, List<MarkerRecord> records)
         { foreach(var record in records) { Received[record.id]=record; Applied++; } }
-        internal void ReceiveCreatures(long peer, List<MarkerRecord> records) => ReceiveDiscoveries(peer,records);
+        internal void ReceiveCreatures(long peer, List<MarkerRecord> records, int leaseSeconds=30)
+        {
+            foreach(var record in records) {
+                float now=UnityEngine.Time.realtimeSinceStartup;
+                if(CreatureUntil.TryGetValue(record.id,out float until)&&until<now)CreatureFlickers++;
+                if(oldUntil.TryGetValue(record.id,out float old)&&old<now)SimulatedOldFlickers++;
+                CreatureUntil[record.id]=now+leaseSeconds;oldUntil[record.id]=now+15;
+            }
+            ReceiveDiscoveries(peer,records);
+        }
     }
     internal class Plugin
     {

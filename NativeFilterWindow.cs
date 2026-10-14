@@ -31,7 +31,7 @@ namespace MapTracker
         internal void Tick()
         {
             mapButton.Tick();
-            if (Player.m_localPlayer == null) Close();
+            if (Player.m_localPlayer == null) { Close(); panel.Dispose(); }
             else if (Open && Input.GetKeyDown(KeyCode.Escape) && !panel.DismissDiscoveries() && !panel.DismissPresets()) Close();
             if (Open) panel.Tick();
         }

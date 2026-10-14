@@ -17,7 +17,8 @@ static class Checks
         var replaced = new GameObject(); mask.Apply(replaced, false);
         Check(!root.activeSelf && replaced.Mask.alpha == 0 && UnityEngine.Object.Destroyed == 1, "a native marker replacement releases its old mask");
         mask.Dispose();
-        Check(!replaced.activeSelf && UnityEngine.Object.Destroyed == 2, "disposing the name visibility layer releases its owned component");
+        Check(!replaced.activeSelf && UnityEngine.Object.Destroyed == 2 && replaced.Mask.alpha == 1,
+            "disposing the name visibility layer restores alpha before releasing its owned component");
     }
 }
 namespace UnityEngine

@@ -6,6 +6,17 @@ namespace MapTracker
 {
     internal static class MarkerLifetime
     {
+        internal static bool Current(IDictionary<string, MarkerRecord> records, MarkerRecord record) =>
+            record != null && !string.IsNullOrEmpty(record.id) && records.TryGetValue(record.id, out var current) && ReferenceEquals(current, record);
+        // A delayed cleanup may still hold an old instance after its ID has been reused.
+        // Release that instance's working-set/UI references without deleting its replacement.
+        internal static bool Forget(IDictionary<string, MarkerRecord> records, MarkerRecord record, Action<MarkerRecord> release)
+        {
+            bool current = Current(records, record);
+            if (current) records.Remove(record.id);
+            release(record);
+            return current;
+        }
         // Called only for confirmed network destruction, never scene unloading.
         // Return true when the saved discoveries must be rewritten.
         internal static bool Destroyed(IDictionary<string, MarkerRecord> records, string id, Action<MarkerRecord> removePin)
@@ -13,7 +24,7 @@ namespace MapTracker
             if (!records.TryGetValue(id, out var record)) return false;
             if (record.dynamic || record.entry?.category == "Portals")
             {
-                removePin(record); records.Remove(id);
+                Forget(records, record, removePin);
                 return !record.dynamic;
             }
             record.collected = true; record.live = false;
@@ -28,7 +39,8 @@ namespace MapTracker
                 .Select(kv => kv.Key).ToList();
             foreach (string id in removed)
             {
-                removePin(records[id]); records.Remove(id);
+                if (!records.TryGetValue(id, out var record)) continue;
+                Forget(records, record, removePin);
             }
             return removed.Count != 0;
         }

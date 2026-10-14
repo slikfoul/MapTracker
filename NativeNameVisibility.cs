@@ -28,7 +28,7 @@ namespace MapTracker
         public void Dispose()
         {
             if (root != null) root.SetActive(false);
-            if (mask != null) UnityEngine.Object.Destroy(mask);
+            if (mask != null) { mask.alpha = 1; UnityEngine.Object.Destroy(mask); }
             root = null; mask = null;
         }
     }

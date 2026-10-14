@@ -165,6 +165,46 @@ try {
         $_.Operand -is [Mono.Cecil.MethodReference] -and $_.Operand.DeclaringType.Name -eq 'Tracking' -and $_.Operand.Name -eq 'get_Ready'
     })) { throw 'Sharing starts before saved-marker preparation completes.' }
     Write-Output 'PASS: no startup polling refresh; deferred budgeted marker preparation and sharing readiness gate verified.'
+    if ($tick.Body.Instructions | Where-Object {
+        $_.Operand -is [Mono.Cecil.MethodReference] -and $_.Operand.Name -eq 'get_Item' -and
+        $_.Operand.DeclaringType.FullName -like '*Dictionary*MapTracker.MarkerRecord*'
+    }) { throw 'Tracking.Tick still dereferences a removed record through a dictionary indexer.' }
+    $destroyed = $tracking.Methods | Where-Object Name -EQ 'Destroyed' | Select-Object -First 1
+    if (-not ($destroyed.Body.Instructions | Where-Object {
+        $_.Operand -is [Mono.Cecil.MethodReference] -and $_.Operand.Name -eq 'ForgetRecord'
+    }) -or ($destroyed.Body.Instructions | Where-Object {
+        $_.Operand -is [Mono.Cecil.MethodReference] -and $_.Operand.Name -eq 'RefreshPins'
+    })) { throw 'Destruction bypasses consistent retirement or refreshes the full archive.' }
+    $lookup = $tracking.Methods | Where-Object Name -EQ 'FindNavigationObject' | Select-Object -First 1
+    if ($lookup.Body.Instructions | Where-Object {
+        $_.Operand -is [Mono.Cecil.MethodReference] -and $_.Operand.DeclaringType.Name -eq 'SharedDiscoveries' -and $_.Operand.Name -eq 'Find'
+    }) { throw 'Shared navigation still performs whole-archive fallback searches.' }
+    Write-Output 'PASS: safe record retirement, incremental destruction refresh and indexed shared-navigation lookup verified.'
+    foreach ($method in $sharing.Methods | Where-Object HasBody) {
+        if ($method.Body.Instructions | Where-Object {
+            $_.Operand -is [Mono.Cecil.FieldReference] -and $_.Operand.Name -eq 'OtherPlayerPins'
+        }) { throw 'Ordinary player-pin visibility still controls mod networking.' }
+    }
+    $visibility = $tracking.Methods | Where-Object Name -EQ 'Visible' | Select-Object -First 1
+    if ($visibility.Body.Instructions | Where-Object {
+        $_.Operand -is [Mono.Cecil.FieldReference] -and $_.Operand.Name -eq 'OtherPlayerPins'
+    }) { throw 'Ordinary player-pin visibility still hides received mod discoveries.' }
+    Write-Output 'PASS: Other player pins affects native pin masking only; mod networking and marker visibility are independent.'
+    $save = $tracking.Methods | Where-Object Name -EQ 'Save' | Select-Object -First 1
+    $saveCalls = @($save.Body.Instructions | Where-Object { $_.Operand -is [Mono.Cecil.MethodReference] } | ForEach-Object { $_.Operand.DeclaringType.Name + '.' + $_.Operand.Name })
+    if ($saveCalls -notcontains 'DiscoverySave.Snapshot' -or $saveCalls -notcontains 'DiscoverySave.WriteAsync' -or
+        $saveCalls -contains 'DataJson.Write' -or $saveCalls -contains 'File.WriteAllText') { throw 'Database serialization or disk writes remain on the game save path.' }
+    $reset = $tracking.Methods | Where-Object Name -EQ 'Reset' | Select-Object -First 1
+    if (@($reset.Body.Instructions | Where-Object { $_.Operand -is [Mono.Cecil.MethodReference] -and $_.Operand.Name -eq 'CompleteSave' }).Count -ne 2) {
+        throw 'World exit does not flush pending and latest database snapshots.'
+    }
+    $saveWorker = $plugin.MainModule.Types | Where-Object Name -EQ 'DiscoverySave' | Select-Object -First 1
+    $write = $saveWorker.Methods | Where-Object Name -EQ 'Write' | Select-Object -First 1
+    $writeCalls = @($write.Body.Instructions | Where-Object { $_.Operand -is [Mono.Cecil.MethodReference] } | ForEach-Object { $_.Operand.DeclaringType.Name + '.' + $_.Operand.Name })
+    if ($writeCalls -notcontains 'DataJson.WriteTo' -or $writeCalls -contains 'DataJson.Write' -or $writeCalls -contains 'File.WriteAllText') {
+        throw 'Save worker still allocates a whole database-sized JSON string.'
+    }
+    Write-Output 'PASS: background streamed persistence and world-exit save flushing verified.'
 } finally {
     $plugin.Dispose(); $gameAssembly.Dispose(); $guiAssembly.Dispose()
 }
