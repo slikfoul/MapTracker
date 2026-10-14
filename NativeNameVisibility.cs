@@ -21,7 +21,9 @@ namespace MapTracker
                 }
             }
             if (mask != null && mask.alpha != (visible ? 1 : 0)) mask.alpha = visible ? 1 : 0;
-            if (root != null && root.activeSelf != visible) root.SetActive(visible);
+            // Native map refreshes activate name objects. Mask crowded labels instead
+            // of deactivating/reactivating them on every refresh (TMP/Canvas rebuilds).
+            if (root != null && visible && !root.activeSelf) root.SetActive(true);
         }
         public void Dispose()
         {

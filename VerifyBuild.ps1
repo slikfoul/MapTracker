@@ -113,6 +113,58 @@ try {
     Write-Output 'This static check does not validate in-game behavior.'
     Write-Output 'PASS: seven embedded PNG icons and the native game decoder signature verified.'
     Write-Output 'PASS: portal destruction event, loaded-area readiness and sector network-object APIs verified.'
+    $sharing = $plugin.MainModule.Types | Where-Object Name -EQ 'MarkerSharing' | Select-Object -First 1
+    $networkWriters = @($sharing.Methods | Where-Object {
+        $_.HasBody -and ($_.Body.Instructions | Where-Object {
+            $_.Operand -is [Mono.Cecil.MethodReference] -and $_.Operand.DeclaringType.Name -eq 'ZRoutedRpc' -and $_.Operand.Name -eq 'InvokeRoutedRPC'
+        })
+    })
+    if ($networkWriters.Count -ne 1 -or $networkWriters[0].Name -ne 'Send') { throw 'Sharing bypasses the central outbound budget.' }
+    foreach ($receiver in @('ReceiveData', 'ReceiveHello', 'ReceiveAck', 'ReceiveProcessed')) {
+        $method = $sharing.Methods | Where-Object Name -EQ $receiver | Select-Object -First 1
+        if (-not $method -or ($method.Body.Instructions | Where-Object {
+            $_.Operand -is [Mono.Cecil.MethodReference] -and $_.Operand.Name -in @('InvokeRoutedRPC', 'Read', 'ReceiveCreatures', 'ReceiveDiscoveries')
+        })) { throw "Synchronous receive work remains in $receiver." }
+    }
+    foreach ($receiver in @('ReceiveCreatures', 'ReceiveDiscoveries')) {
+        $method = $tracking.Methods | Where-Object Name -EQ $receiver | Select-Object -First 1
+        if ($method.Body.Instructions | Where-Object {
+            $_.Operand -is [Mono.Cecil.MethodReference] -and $_.Operand.Name -in @('RefreshPins', 'Save')
+        }) { throw "Full map/database refresh remains in $receiver." }
+    }
+    $socket = $gameAssembly.MainModule.Types | Where-Object Name -EQ 'ISocket' | Select-Object -First 1
+    if (-not ($socket.Methods | Where-Object { $_.Name -eq 'GetSendQueueSize' -and $_.ReturnType.FullName -eq 'System.Int32' })) {
+        throw 'Native socket queue API signature changed.'
+    }
+    Write-Output 'PASS: bounded RPC sender, deferred receive callbacks, incremental map updates and native socket queue API verified.'
+    foreach ($name in @('StylePins', 'EnforceNameVisibility', 'UpdateNearbyNames', 'OwnCreatures')) {
+        $method = $tracking.Methods | Where-Object Name -EQ $name | Select-Object -First 1
+        if ($method.Body.Instructions | Where-Object { $_.Operand -is [Mono.Cecil.FieldReference] -and $_.Operand.Name -eq 'records' }) {
+            throw "Saved discovery archive is traversed by per-frame path $name."
+        }
+    }
+    $style = $tracking.Methods | Where-Object Name -EQ 'StylePins' | Select-Object -First 1
+    $styleCalls = @($style.Body.Instructions | Where-Object { $_.Operand -is [Mono.Cecil.MethodReference] } | ForEach-Object { $_.Operand.DeclaringType.Name + '.' + $_.Operand.Name })
+    if ([Array]::IndexOf($styleCalls, 'MarkerGrouping.UpdateNames') -lt [Array]::IndexOf($styleCalls, 'CreatureNameGroups.Apply')) {
+        throw 'Caption update precedes name grouping and may dirty TMP twice.'
+    }
+    $tick = $tracking.Methods | Where-Object Name -EQ 'Tick' | Select-Object -First 1
+    if (@($tick.Body.Instructions | Where-Object { $_.OpCode.Name -eq 'stfld' -and $_.Operand.Name -eq 'discoveryIndex' }).Count -ne 1) {
+        throw 'Discovery index lifecycle changed; verify it is retained across scans.'
+    }
+    Write-Output 'PASS: per-frame map paths use active working sets; spatial index survives scans; captions update after name grouping.'
+    $load = $tracking.Methods | Where-Object Name -EQ 'Load' | Select-Object -First 1
+    if ($load.Body.Instructions | Where-Object {
+        $_.Operand -is [Mono.Cecil.MethodReference] -and $_.Operand.Name -in @('GetSavedDefinition', 'GetLegacyDungeon', 'RemoveDuplicates', 'RefreshPins')
+    }) { throw 'Saved-file loading binds definitions or performs repeated map/archive reconciliation.' }
+    if ($tracking.Fields | Where-Object Name -EQ 'nextEarlyRefresh') { throw 'Polling refresh during catalog startup remains.' }
+    $tickCalls = @($tick.Body.Instructions | Where-Object { $_.Operand -is [Mono.Cecil.MethodReference] } | ForEach-Object { $_.Operand.DeclaringType.Name + '.' + $_.Operand.Name })
+    if ($tickCalls -notcontains 'FrameWork.Advance') { throw 'Saved-marker preparation is not frame-budgeted.' }
+    $sharingTick = $sharing.Methods | Where-Object Name -EQ 'Tick' | Select-Object -First 1
+    if (-not ($sharingTick.Body.Instructions | Where-Object {
+        $_.Operand -is [Mono.Cecil.MethodReference] -and $_.Operand.DeclaringType.Name -eq 'Tracking' -and $_.Operand.Name -eq 'get_Ready'
+    })) { throw 'Sharing starts before saved-marker preparation completes.' }
+    Write-Output 'PASS: no startup polling refresh; deferred budgeted marker preparation and sharing readiness gate verified.'
 } finally {
     $plugin.Dispose(); $gameAssembly.Dispose(); $guiAssembly.Dispose()
 }

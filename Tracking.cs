@@ -30,6 +30,7 @@ namespace MapTracker
         [NonSerialized] internal Vector3 remoteCreaturePosition;
         [NonSerialized] internal int remoteCreatureLevel, remoteCreatureRelation;
         [NonSerialized] internal bool live, dynamic, sightVisible;
+        [NonSerialized] internal bool groupHidden, onMap;
         [NonSerialized] internal int observationScan;
         [NonSerialized] internal Character character;
         [NonSerialized] internal CatalogEntry entry;
@@ -70,10 +71,17 @@ namespace MapTracker
         private static readonly MethodInfo Rock5Empty = AccessTools.Method(typeof(MineRock5), "AllDestroyed");
         private List<KeyValuePair<ZDO, ZNetView>> snapshot;
         private SharedDiscoveryIndex discoveryIndex;
+        private readonly HashSet<MarkerRecord> pinnedRecords = new HashSet<MarkerRecord>();
+        private readonly HashSet<MarkerRecord> dynamicRecords = new HashSet<MarkerRecord>();
+        private readonly HashSet<MarkerRecord> liveRecords = new HashSet<MarkerRecord>();
+        private readonly HashSet<MarkerRecord> remoteStaticRecords = new HashSet<MarkerRecord>();
+        private readonly List<MarkerRecord> expiredRemote = new List<MarkerRecord>();
+        private float nextMovingPinRefresh;
         private readonly List<KeyValuePair<ZDO, ZNetView>> snapshotBuffer = new List<KeyValuePair<ZDO, ZNetView>>();
         private readonly HashSet<MarkerRecord> pinChanges = new HashSet<MarkerRecord>();
         private readonly List<string> expiredRecords = new List<string>();
         private bool fullPinRefresh;
+        private bool receivedPinChanges;
         private string language;
         internal readonly DiscoveryTools Discoveries;
         internal IEnumerable<MarkerRecord> Records => records.Values;
@@ -105,8 +113,9 @@ namespace MapTracker
         private readonly List<ZDO> nearbyPortalData = new List<ZDO>();
         private float nextPortalCheck;
         private float pendingDeadline;
-        private float nextEarlyRefresh;
+        private IEnumerator<byte> savedPreparation;
         private bool definitionsResolved;
+        internal bool Ready => loaded && definitionsResolved && host.Catalog.Ready;
         internal Tracking(Plugin plugin) { host = plugin; Discoveries = new DiscoveryTools(this, plugin); }
         internal void SettingsChanged() { fullPinRefresh = true; grouping.Invalidate(); creatureNameGroups.Invalidate(); }
         private int nameDiagnosticSamples;
@@ -138,15 +147,22 @@ namespace MapTracker
             if (map != Minimap.instance)
             {
                 RemovePins(); map = Minimap.instance;
-                ResolveSavedDefinitions(); RefreshPins();
+                fullPinRefresh = true;
             }
-            if (!host.Catalog.Ready)
+            if (!host.Enabled.Value)
             {
-                if (Time.realtimeSinceStartup >= nextEarlyRefresh)
-                { ResolveSavedDefinitions(); RefreshPins(); nextEarlyRefresh = Time.realtimeSinceStartup + 0.25f; }
+                snapshot = null;
+                if (fullPinRefresh && definitionsResolved) { fullPinRefresh = false; RefreshPins(); }
                 return;
             }
-            if (!definitionsResolved) { ResolveSavedDefinitions(); RefreshPins(); definitionsResolved = true; }
+            if (!host.Catalog.Ready) return;
+            if (!definitionsResolved)
+            {
+                if (savedPreparation == null) savedPreparation = PrepareSavedMarkers().GetEnumerator();
+                definitionsResolved = FrameWork.Advance(ref savedPreparation, host.ScanBudget.Value);
+                // Catalog collection, saved-marker preparation and world scanning use separate frames.
+                return;
+            }
             string currentLanguage = Localization.instance?.GetSelectedLanguage();
             if (language != currentLanguage) { language = currentLanguage; SettingsChanged(); }
             if (fullPinRefresh) { fullPinRefresh = false; foreach (var r in records.Values) r.nameCache = null; RefreshPins(); }
@@ -157,7 +173,7 @@ namespace MapTracker
                 snapshotBuffer.Clear();
                 if (instances != null) foreach (var pair in instances) snapshotBuffer.Add(pair);
                 snapshot = snapshotBuffer;
-                discoveryIndex = new SharedDiscoveryIndex(records.Values);
+                if (discoveryIndex == null) discoveryIndex = new SharedDiscoveryIndex(records.Values) { CandidateIsCurrent = Contains };
                 cursor = 0;
             }
             if (snapshot != null)
@@ -174,38 +190,43 @@ namespace MapTracker
                 }
                 if (cursor >= snapshot.Count)
                 {
-                    foreach (var record in records.Values)
+                    foreach (var record in liveRecords)
                         if (!record.shared && record.observationScan != scanSerial)
                         {
                             if (record.live || record.sightVisible) pinChanges.Add(record);
                             record.live = false; record.sightVisible = false;
                             SharedDiscoveries.HandOffCreature(record, Time.realtimeSinceStartup);
                         }
-                    foreach (string id in records.Where(kv => kv.Value.dynamic && !kv.Value.shared && !kv.Value.live && kv.Value.remoteSeenUntil <= Time.realtimeSinceStartup).Select(kv => kv.Key).ToList())
+                    foreach (string id in dynamicRecords.Where(r => !r.shared && !r.live && r.remoteSeenUntil <= Time.realtimeSinceStartup).Select(r => r.id).ToList())
                     {
                         RemovePin(records[id]); records.Remove(id);
                     }
-                    snapshot = null; discoveryIndex = null; nextScan = Time.realtimeSinceStartup + (host.SightDetection ? 0.15f : 0.5f);
+                    liveRecords.RemoveWhere(r => !r.live || !Contains(r));
+                    dynamicRecords.RemoveWhere(r => !Contains(r));
+                    snapshot = null; nextScan = Time.realtimeSinceStartup + (host.SightDetection ? 0.15f : 0.5f);
                     RefreshPins(false);
                 }
             }
             expiredRecords.Clear();
-            foreach (var pair in records)
-                if (pair.Value.shared && pair.Value.dynamic && Time.realtimeSinceStartup > pair.Value.expiresAt) expiredRecords.Add(pair.Key);
+            foreach (var record in dynamicRecords)
+                if (record.shared && Time.realtimeSinceStartup > record.expiresAt) expiredRecords.Add(record.id);
             foreach (string id in expiredRecords)
-            { RemovePin(records[id]); records.Remove(id); }
-            foreach (var record in records.Values)
-                if (!record.dynamic && record.remoteSeenUntil > 0 && record.remoteSeenUntil <= Time.realtimeSinceStartup)
-                { record.remoteSeenUntil = 0; record.remoteObservers?.Clear(); if (record.pin != null && !Visible(record)) RemovePin(record); }
+            { if (!records.TryGetValue(id, out var record)) continue; RemovePin(record); records.Remove(id); dynamicRecords.Remove(record); }
+            expiredRemote.Clear();
+            foreach (var record in remoteStaticRecords)
+                if (!Contains(record) || record.remoteSeenUntil <= Time.realtimeSinceStartup)
+                { record.remoteSeenUntil = 0; record.remoteObservers?.Clear(); if (record.pin != null && !Visible(record)) RemovePin(record); expiredRemote.Add(record); }
+            foreach (var record in expiredRemote) remoteStaticRecords.Remove(record);
             bool positionsChanged = false;
-            foreach (var record in records.Values)
+            foreach (var record in dynamicRecords)
                 if (record.dynamic && record.pin != null && record.character != null)
                 {
                     Vector3 position = record.character.transform.position;
                     record.position = position;
                     if (record.pin.m_pos != position) { record.pin.m_pos = position; positionsChanged = true; }
                 }
-            if (positionsChanged) RequestPinRefresh();
+            if (positionsChanged && Time.realtimeSinceStartup >= nextMovingPinRefresh)
+            { nextMovingPinRefresh = Time.realtimeSinceStartup + 0.1f; RequestPinRefresh(); }
             ReconcilePortals(player);
             Discoveries.Tick();
             if (pendingEntrance != null)
@@ -214,6 +235,7 @@ namespace MapTracker
                 else if (Time.realtimeSinceStartup > pendingDeadline) pendingEntrance = null;
             }
             if (dirty && Time.realtimeSinceStartup >= nextSave) Save();
+            if (receivedPinChanges) { receivedPinChanges = false; RefreshPins(false); }
         }
 
         private bool Observe(ZDO zdo, ZNetView view)
@@ -232,8 +254,8 @@ namespace MapTracker
             // Never scan rooms or resources in interiors; only external entrances are retained.
             if (!location && view.transform.position.y > 3000f) return true;
             bool dynamic = entry.creature || view.GetComponent<ItemDrop>() != null;
-            bool shareDetection = host.Enabled.Value && host.ShareMarkers.Value &&
-                (!dynamic || entry.creature && host.ShareCreatures.Value);
+            bool shareDetection = host.Enabled.Value &&
+                (!dynamic && host.ShareMarkers.Value || entry.creature && host.ShareCreatures.Value);
             if (!entry.dungeon && !entry.Selected.Value && !shareDetection && !records.ContainsKey(zdo.m_uid.ToString())) return true;
             string id = zdo.m_uid.ToString();
             Vector3 position = view.transform.position;
@@ -272,15 +294,18 @@ namespace MapTracker
             }
             bool presentationChanged = newIdentity || !record.live || record.entry != entry || record.sightVisible != visibleNow || dynamic;
             record.entry = entry; record.character = ch; record.dynamic = dynamic; record.live = true;
+            liveRecords.Add(record);
+            if (dynamic) dynamicRecords.Add(record); else dynamicRecords.Remove(record);
             record.observationScan = scanSerial;
             record.sightVisible = visibleNow;
-            if (record.shared && (!host.SightDetection || visibleNow)) { record.shared = false; record.sourcePeer = 0; dirty = true; }
+            if (record.shared && (!host.SightDetection || visibleNow)) { record.shared = false; record.sourcePeer = 0; if (!dynamic) dirty = true; }
             if (view.GetComponent<TeleportWorld>() is TeleportWorld portal)
             {
                 string tag = portal.GetText();
                 if (record.portalTag != tag) { record.portalTag = tag; dirty = presentationChanged = true; }
             }
             if (record.position != position) { record.position = position; presentationChanged = true; if (!dynamic) dirty = true; }
+            if (!dynamic) discoveryIndex?.Add(record);
             bool collected = false;
             Pickable plant = view.GetComponent<Pickable>();
             if (plant != null)
@@ -410,7 +435,7 @@ namespace MapTracker
         internal List<MarkerRecord> OwnCreatures()
         {
             var result = new List<MarkerRecord>();
-            foreach (var record in records.Values)
+            foreach (var record in dynamicRecords)
             {
                 Character ch = record.character;
                 if (!record.dynamic || record.shared || !record.live || !record.entry.creature || ch == null || ch.IsDead() ||
@@ -428,24 +453,27 @@ namespace MapTracker
             foreach (var record in incoming)
             {
                 if (record == null || !ValidSharedRecord(record) || record.creatureRelation < 1 || record.creatureRelation > 4 || record.creatureLevel < 1 || record.creatureLevel > 100) continue;
-                var entry = host.Catalog.Entries.FirstOrDefault(e => e.key == record.type);
+                var entry = host.Catalog.GetSavedDefinition(record.type);
                 if (entry == null || !entry.creature) continue;
                 if (records.TryGetValue(record.id, out var existing))
                 {
+                    if (!existing.dynamic || existing.type != record.type) continue;
                     SharedDiscoveries.ObserveCreature(existing, record, sender, Time.realtimeSinceStartup);
                     if (!existing.shared) continue;
+                    bool changed = !SharingDelta.Equivalent(existing, record, true);
                     existing.position = record.position; existing.creatureLevel = record.creatureLevel; existing.creatureRelation = record.creatureRelation;
-                    existing.sourcePeer = sender; existing.expiresAt = Time.realtimeSinceStartup + 4;
-                    if (existing.pin != null) existing.pin.m_pos = existing.position;
+                    existing.sourcePeer = sender; existing.expiresAt = Time.realtimeSinceStartup + 15;
+                    if (changed) { pinChanges.Add(existing); receivedPinChanges = true; }
                 }
                 else
                 {
                     record.entry = entry; record.shared = true; record.sourcePeer = sender; record.dynamic = true;
-                    record.expiresAt = Time.realtimeSinceStartup + 4; records[record.id] = record;
+                    record.expiresAt = Time.realtimeSinceStartup + 15; records[record.id] = record;
                     SharedDiscoveries.ObserveCreature(record, record, sender, Time.realtimeSinceStartup);
+                    dynamicRecords.Add(record);
+                    pinChanges.Add(record); receivedPinChanges = true;
                 }
             }
-            RefreshPins();
         }
         private static bool ValidSharedRecord(MarkerRecord record)
         {
@@ -457,18 +485,28 @@ namespace MapTracker
         internal void ReceiveDiscoveries(long sender, List<MarkerRecord> incoming)
         {
             if (!loaded) return;
-            var index = discoveryIndex ?? new SharedDiscoveryIndex(records.Values);
+            if (discoveryIndex == null) discoveryIndex = new SharedDiscoveryIndex(records.Values) { CandidateIsCurrent = Contains };
+            var index = discoveryIndex;
             foreach (var record in incoming)
             {
                 if (record == null || !ValidSharedRecord(record)) continue;
-                CatalogEntry entry = host.Catalog.Entries.FirstOrDefault(e => e.key == record.type);
+                CatalogEntry entry = host.Catalog.GetSavedDefinition(record.type);
                 if (entry == null && record.imported && record.type.StartsWith("legacy:", StringComparison.Ordinal))
                     entry = host.Catalog.GetLegacyDungeon(record.type.Substring("legacy:".Length));
                 if (entry == null || entry.creature || entry.category == "Dropped items") continue;
                 record.entry = entry;
-                SharedDiscoveries.Receive(records, record, sender, Time.realtimeSinceStartup, index); dirty = true;
+                var existing = records.TryGetValue(record.id, out var exact) ? exact : index.Find(record.type, record.position);
+                if (existing != null && (existing.dynamic || existing.type != record.type && existing.entry?.key != record.type)) continue;
+                bool persistentChange = existing == null || existing.shared &&
+                    (existing.position != record.position || existing.portalTag != record.portalTag ||
+                     existing.collected != record.collected || existing.visited != record.visited ||
+                     existing.completed != record.completed || existing.pickedTime != record.pickedTime);
+                bool visibilityChange = existing == null || (existing.remoteSeenUntil > Time.realtimeSinceStartup) != record.observed;
+                var merged = SharedDiscoveries.Receive(records, record, sender, Time.realtimeSinceStartup, index);
+                index.Add(merged); remoteStaticRecords.Add(merged);
+                dirty |= persistentChange;
+                if (persistentChange || visibilityChange) { pinChanges.Add(merged); receivedPinChanges = true; }
             }
-            RefreshPins();
         }
         private void RefreshPins(bool all = true)
         {
@@ -477,21 +515,29 @@ namespace MapTracker
             foreach (var record in all ? (IEnumerable<MarkerRecord>)records.Values : pinChanges)
             {
                 if (!records.TryGetValue(record.id, out var current) || current != record) continue;
-                if (!Visible(record)) { changed |= record.pin != null; RemovePin(record); continue; }
-                string name = Name(record);
-                if (record.pin != null && record.pin.m_name != name) { RemovePin(record); changed = true; }
-                if (record.pin == null)
-                {
-                    record.pin = map.AddPin(record.position, Minimap.PinType.Icon3, name, false, record.collected || record.completed);
-                    changed = true;
-                    if (!record.entry.creature && record.entry.Icon != null) record.pin.m_icon = record.entry.Icon;
-                }
-                if (record.pin.m_pos != record.position) { record.pin.m_pos = record.position; changed = true; }
-                bool check = record.collected || record.completed;
-                if (record.pin.m_checked != check) { record.pin.m_checked = check; changed = true; }
+                changed |= RefreshPin(record);
             }
             pinChanges.Clear();
             if (changed || all) RequestPinRefresh();
+        }
+        private bool RefreshPin(MarkerRecord record)
+        {
+            if (map == null) return false;
+            bool changed = false;
+            if (!Visible(record)) { changed = record.pin != null; RemovePin(record); return changed; }
+            string name = Name(record);
+            if (record.pin != null && record.pin.m_name != name) { RemovePin(record); changed = true; }
+            if (record.pin == null)
+            {
+                record.pin = map.AddPin(record.position, Minimap.PinType.Icon3, name, false, record.collected || record.completed);
+                pinnedRecords.Add(record);
+                changed = true;
+                if (!record.entry.creature && record.entry.Icon != null) record.pin.m_icon = record.entry.Icon;
+            }
+            if (record.pin.m_pos != record.position) { record.pin.m_pos = record.position; changed = true; }
+            bool check = record.collected || record.completed;
+            if (record.pin.m_checked != check) { record.pin.m_checked = check; changed = true; }
+            return changed;
         }
         internal void RequestPinRefresh() { if (Minimap.instance != null) PinUpdateRequired.SetValue(Minimap.instance, true); }
         internal void DetectionChanged()
@@ -507,19 +553,18 @@ namespace MapTracker
             var area = map.m_mode == Minimap.MapMode.Large ? map.m_mapImageLarge.rectTransform : map.m_mapImageSmall.rectTransform;
             var canvas = area.GetComponentInParent<Canvas>()?.rootCanvas;
             var camera = canvas != null && canvas.renderMode != RenderMode.ScreenSpaceOverlay ? canvas.worldCamera : null;
-            foreach (var record in records.Values)
+            foreach (var record in pinnedRecords)
             {
                 var pin = record.pin;
                 if (pin?.m_uiElement == null) continue;
-                bool onMap = visible && host.Enabled.Value && (Discoveries.IsNavigationTarget(record) || host.MapCategories.Visible(record.entry.category, map.m_mode == Minimap.MapMode.Large)) && MarkerPresentation.OnMap(area, camera, pin.m_uiElement);
-                if (pin.m_uiElement.gameObject.activeSelf != onMap) pin.m_uiElement.gameObject.SetActive(onMap);
+                bool onMap = visible && host.Enabled.Value && area.gameObject.activeInHierarchy && (Discoveries.IsNavigationTarget(record) || host.MapCategories.Visible(record.entry.category, map.m_mode == Minimap.MapMode.Large)) && MarkerPresentation.OnMap(area, camera, pin.m_uiElement);
+                record.onMap = onMap;
+                bool iconVisible = onMap && !record.groupHidden;
+                if (pin.m_uiElement.gameObject.activeSelf != iconVisible) pin.m_uiElement.gameObject.SetActive(iconVisible);
                 if (!onMap) { record.nearbyName?.Hide(); continue; }
                 bool personalTarget = Discoveries.IsTarget(record), sharedTarget = Discoveries.IsSharedObject(record);
                 if (record.targetHighlight == null) record.targetHighlight = new TargetMarkerHighlight();
                 record.targetHighlight.Apply(pin.m_uiElement, personalTarget, sharedTarget);
-                if (pin.m_NamePinData?.PinNameGameObject != null)
-                    pin.m_NamePinData.PinNameGameObject.SetActive(visible && host.Enabled.Value && !host.HideLargeMapNames.Value &&
-                        map.m_mode == Minimap.MapMode.Large && MapLabelZoom.Visible(map.LargeZoom, map.m_minZoom, map.m_showNamesZoom));
                 if (pin.m_iconElement != null)
                     pin.m_iconElement.color = personalTarget || sharedTarget ? TargetHighlight.Tint(personalTarget, sharedTarget) : record.collected || record.completed ? Color.gray :
                         record.visited ? new Color(0.45f, 0.75f, 1f) : record.entry.creature ?
@@ -536,8 +581,7 @@ namespace MapTracker
                         Player.m_localPlayer != null ? Utils.DistanceXZ(record.position, Player.m_localPlayer.transform.position) : float.MaxValue,
                         zoom, map.m_minZoom, map.m_showNamesZoom, large ? host.CreatureIcons.Value : host.MinimapCreatureIcons.Value);
                     if (showHead) size = large ? host.LargeMapCreatureIconSize.Value : host.MinimapCreatureIconSize.Value;
-                    pin.m_uiElement.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, size);
-                    pin.m_uiElement.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, size);
+                    SetPinSize(pin.m_uiElement, size);
                     if (pin.m_iconElement != null) pin.m_iconElement.enabled = !showHead;
                     if (record.creatureIcon == null) record.creatureIcon = new CreatureMapIcon();
                     record.creatureIcon.Update(pin.m_uiElement, sprite, size, showHead, host.ContrastCreatureIcons.Value, host.CreatureOutlineThickness.Value);
@@ -548,18 +592,23 @@ namespace MapTracker
                 else if (record.entry.dungeon)
                 {
                     float size = map.m_mode == Minimap.MapMode.Large ? 24f : 18f;
-                    pin.m_uiElement.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, size);
-                    pin.m_uiElement.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, size);
+                    SetPinSize(pin.m_uiElement, size);
                     if (record.dungeonIcon == null) record.dungeonIcon = new DungeonIcon();
                     record.dungeonIcon.Update(pin, record.entry.prefab);
                 }
             }
-            grouping.Apply(records.Values, map, host, Name);
-            creatureNameGroups.Apply(records.Values, map, host);
-            largeLabels.Apply(records.Values, map, host);
+            grouping.Apply(pinnedRecords, map, host, Name);
+            creatureNameGroups.Apply(pinnedRecords, map, host);
+            grouping.UpdateNames(pinnedRecords, Name);
+            largeLabels.Apply(pinnedRecords, map, host);
             EnforceNameVisibility();
             grouping.DrawTooltip(map, host, Name);
             ApplySharedPinVisibility(map);
+        }
+        private static void SetPinSize(RectTransform rect, float size)
+        {
+            if (rect.rect.width != size) rect.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, size);
+            if (rect.rect.height != size) rect.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, size);
         }
         private void ApplySharedPinVisibility(Minimap currentMap)
         {
@@ -581,7 +630,7 @@ namespace MapTracker
             EnforceNameVisibility();
             UpdateNearbyNames();
             Discoveries.DrawNavigation(map);
-            creatureHover.Apply(records.Values, map, host, Name);
+            creatureHover.Apply(pinnedRecords, map, host, Name);
             playerLayer.Apply(Minimap.instance, host.Enabled.Value && !host.Window.Open);
             DiagnoseMinimapNames();
         }
@@ -590,7 +639,7 @@ namespace MapTracker
             if (map == null || Player.m_localPlayer == null || map.m_mode == Minimap.MapMode.Large ||
                 !map.m_smallRoot.activeInHierarchy || host.HideMinimapNames.Value || nameDiagnosticSamples >= 4 ||
                 Time.realtimeSinceStartup < nextNameDiagnostic) return;
-            var active = records.Values.Where(r => r.entry?.creature == true && r.pin?.m_uiElement != null &&
+            var active = pinnedRecords.Where(r => r.entry?.creature == true && r.pin?.m_uiElement != null &&
                 r.pin.m_uiElement.gameObject.activeInHierarchy).ToList();
             if (active.Count == 0) return;
             var player = Player.m_localPlayer.transform.position;
@@ -609,10 +658,11 @@ namespace MapTracker
             if (map == null || map != Minimap.instance) return;
             bool namesAllowed = host.Enabled.Value && host.LargeMap.Value && !host.HideLargeMapNames.Value && map.m_mode == Minimap.MapMode.Large &&
                 MapLabelZoom.Visible(map.LargeZoom, map.m_minZoom, map.m_showNamesZoom);
-            foreach (var record in records.Values)
+            foreach (var record in pinnedRecords)
             {
                 if (record.pin == null || (record.nameVisibility == null && record.pin.m_NamePinData?.PinNameGameObject == null)) continue;
-                NameTextStyle.Apply(record.pin.m_NamePinData?.PinNameText,
+                if (!namesAllowed && record.nameVisibility == null && record.pin.m_NamePinData?.PinNameGameObject?.activeSelf != true) continue;
+                if (namesAllowed) NameTextStyle.Apply(record.pin.m_NamePinData?.PinNameText,
                     record.entry?.creature == true ? host.CreatureNameSize.Value : host.ObjectNameSize.Value);
                 if (record.nameVisibility == null) record.nameVisibility = new NativeNameVisibility();
                 record.nameVisibility.Apply(record.pin.m_NamePinData?.PinNameGameObject,
@@ -625,8 +675,13 @@ namespace MapTracker
             var player = Player.m_localPlayer;
             bool enabled = host.Enabled.Value && host.SmallMap.Value && !host.HideMinimapNames.Value &&
                 map.m_mode != Minimap.MapMode.Large && map.m_smallRoot.activeInHierarchy && player != null;
+            if (!enabled)
+            {
+                foreach (var record in nearbyNames) { record.nearbyNameShown = false; record.nearbyName?.Hide(); }
+                nearbyNames.Clear(); nearbyNameBoxes.Clear(); return;
+            }
             nearbyNames.Clear(); nearbyNameBoxes.Clear();
-            foreach (var record in records.Values)
+            foreach (var record in pinnedRecords)
             {
                 if (record.entry?.creature != true) continue;
                 bool show = enabled && !record.nameGroupFollower && record.pin?.m_uiElement != null && record.pin.m_uiElement.gameObject.activeInHierarchy &&
@@ -817,27 +872,33 @@ namespace MapTracker
                 foreach (var record in file.markers)
                 {
                     if (record == null || string.IsNullOrEmpty(record.id) || string.IsNullOrEmpty(record.type)) continue;
-                    record.entry = host.Catalog.GetSavedDefinition(record.type);
-                    if (record.imported && record.type.StartsWith("legacy:", StringComparison.Ordinal))
-                        record.entry = host.Catalog.GetLegacyDungeon(record.type.Substring("legacy:".Length));
                     records[record.id] = record;
                 }
-                dirty |= MarkerLifetime.RemoveDestroyedPortals(records, RemovePin);
-                dirty |= DungeonDiscoveries.RemoveDuplicates(records, RemovePin);
-                dirty |= SharedDiscoveries.RemoveDuplicates(records, RemovePin);
             }
             catch (Exception e) { host.Report("Saved markers could not be loaded; original file retained", e); savePath = null; }
         }
-        private void ResolveSavedDefinitions()
+        private IEnumerable<byte> PrepareSavedMarkers()
         {
-            foreach (var record in records.Values)
+            var saved = records.Values.ToList();
+            foreach (var record in saved)
             {
                 var entry = host.Catalog.GetSavedDefinition(record.type);
+                if (entry == null && record.imported && record.type.StartsWith("legacy:", StringComparison.Ordinal))
+                    entry = host.Catalog.GetLegacyDungeon(record.type.Substring("legacy:".Length));
                 if (entry != null && entry != record.entry) { RemovePin(record); record.entry = entry; record.nameCache = null; }
+                if (record.collected && record.entry?.category == "Portals")
+                { RemovePin(record); records.Remove(record.id); dirty = true; }
+                yield return 0;
             }
-            dirty |= MarkerLifetime.RemoveDestroyedPortals(records, RemovePin);
-            dirty |= DungeonDiscoveries.RemoveDuplicates(records, RemovePin);
-            dirty |= SharedDiscoveries.RemoveDuplicates(records, RemovePin);
+            foreach (var step in DungeonDiscoveries.RemoveDuplicatesIncrementally(records, RemovePin, () => dirty = true)) yield return step;
+            foreach (var step in SharedDiscoveries.RemoveDuplicatesIncrementally(records, RemovePin, () => dirty = true,
+                index => { index.CandidateIsCurrent = Contains; discoveryIndex = index; })) yield return step;
+            fullPinRefresh = false;
+            foreach (var record in saved)
+            {
+                if (Contains(record) && RefreshPin(record)) RequestPinRefresh();
+                yield return 0;
+            }
         }
         private bool Save()
         {
@@ -859,6 +920,7 @@ namespace MapTracker
         }
         private void RemovePin(MarkerRecord record)
         {
+            pinnedRecords.Remove(record); record.onMap = record.groupHidden = false;
             record.nearbyName?.Dispose(); record.nearbyName = null;
             record.nameVisibility?.Dispose(); record.nameVisibility = null;
             if (record.pin != null && map != null) map.RemovePin(record.pin);
@@ -868,13 +930,15 @@ namespace MapTracker
         private void Reset()
         {
             Save(); RemovePins(); records.Clear(); pinChanges.Clear(); snapshotBuffer.Clear(); snapshot = null; discoveryIndex = null; pendingEntrance = null;
+            pinnedRecords.Clear(); dynamicRecords.Clear(); liveRecords.Clear(); remoteStaticRecords.Clear(); expiredRemote.Clear();
+            nextMovingPinRefresh = 0; receivedPinChanges = false;
             Discoveries.Reset();
             creatureNameGroups.Reset();
             grouping.Dispose(); creatureHover.Dispose();
             if (manager != null) manager.m_onZDODestroyed -= Destroyed;
             manager = null; loaded = false; dirty = false; map = null;
             portalReconciliation.Clear(); portalCandidates.Clear(); nearbyPortalData.Clear(); nextPortalCheck = 0;
-            definitionsResolved = false; nextEarlyRefresh = 0;
+            savedPreparation?.Dispose(); savedPreparation = null; definitionsResolved = false;
             ResetNameDiagnostics();
         }
         public void Dispose() { Reset(); ReleaseSharedMasks(true); playerLayer.Dispose(); }

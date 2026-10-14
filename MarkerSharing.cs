@@ -1,176 +1,227 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 using UnityEngine;
 
 namespace MapTracker
 {
     internal sealed class MarkerSharing
     {
-        private const string Hello = "MapTracker.Discoveries.Hello.v1";
-        private const string Ack = "MapTracker.Discoveries.Ack.v1";
-        private const string Data = "MapTracker.Discoveries.Data.v1";
-        private const string Creatures = "MapTracker.Discoveries.Creatures.v1";
-        private const string TargetHello = "MapTracker.Navigation.Hello.v1";
-        private const string TargetAck = "MapTracker.Navigation.Ack.v1";
-        private const string TargetData = "MapTracker.Navigation.Target.v1";
+        // Do not acknowledge v1 peers: their unbounded snapshots use the native reliable channel.
+        private const string Hello = "MapTracker.Discoveries.Hello.v2";
+        private const string Ack = "MapTracker.Discoveries.Ack.v2";
+        private const string Data = "MapTracker.Discoveries.Data.v2";
+        private const string Processed = "MapTracker.Discoveries.Processed.v2";
         private readonly Plugin host;
         private ZRoutedRpc rpc;
         private string world;
-        private readonly Dictionary<long, float> peers = new Dictionary<long, float>();
-        private readonly Dictionary<long, float> targetPeers = new Dictionary<long, float>();
-        private readonly Dictionary<long, float> lastTargetReceived = new Dictionary<long, float>();
-        private float nextTargetSend;
-        private List<MarkerRecord> outgoing;
+        private bool active;
+        private readonly Dictionary<long, SharingPeer> peers = new Dictionary<long, SharingPeer>();
+        private readonly List<long> order = new List<long>();
+        private sealed class Control { internal string Method, Value; }
+        private readonly Dictionary<long, Control> controls = new Dictionary<long, Control>();
+        private readonly SharingInbox inbox = new SharingInbox();
+        private SharingBudget budget = NewBudget();
         private int cursor;
-        private float nextHello, nextSnapshot, nextBatch;
-        private float nextCreatures;
-        private readonly CreatureNetworkDelta creatureDelta = new CreatureNetworkDelta();
+        private float nextHello, nextSend, nextSnapshot, nextCreatureSnapshot, nextTargetSend;
+        private string advertised;
+        private string session = Guid.NewGuid().ToString("N");
+        private List<MarkerRecord> discoveries = new List<MarkerRecord>(), creatures = new List<MarkerRecord>();
+        private static SharingBudget NewBudget() => new SharingBudget(8192, SharingBudget.PacketBytes + SharingBudget.EnvelopeBytes);
         internal MarkerSharing(Plugin plugin) { host = plugin; }
+        private bool Interested => host.Enabled.Value && (host.ShareMarkers.Value || host.ShareCreatures.Value || host.OtherPlayerPins.Value);
+        private string Announcement => "2:" + world + ":" + session + ":" + (host.OtherPlayerPins.Value ? "1" : "0") + ":" + (host.ShareMarkers.Value ? "1" : "0");
 
         internal void Tick()
         {
-            if (Player.m_localPlayer == null || ZNet.instance == null || ZRoutedRpc.instance == null || !host.Catalog.Ready) return;
+            if (!Interested) { if (active) Reset(); return; }
+            if (Player.m_localPlayer == null || ZNet.instance == null || ZRoutedRpc.instance == null) { if (active) Reset(); return; }
             string current = ZNet.instance.GetWorldUID().ToString();
             if (rpc != ZRoutedRpc.instance)
             {
-                rpc = ZRoutedRpc.instance;
-                rpc.Register<string>(Hello, ReceiveHello);
-                rpc.Register<string>(Ack, ReceiveAck);
-                rpc.Register<string>(Data, ReceiveData);
-                rpc.Register<string>(Creatures, ReceiveCreatures);
-                rpc.Register<string>(TargetHello, ReceiveTargetHello);
-                rpc.Register<string>(TargetAck, ReceiveTargetAck);
-                rpc.Register<string>(TargetData, ReceiveTarget);
-                world = null;
+                Reset(); rpc = ZRoutedRpc.instance;
+                rpc.Register<string>(Hello, ReceiveHello); rpc.Register<string>(Ack, ReceiveAck);
+                rpc.Register<string>(Data, ReceiveData); rpc.Register<string>(Processed, ReceiveProcessed);
             }
-            if (world != current)
-            {
-                world = current; peers.Clear(); targetPeers.Clear(); lastTargetReceived.Clear(); creatureDelta.Reset(); nextTargetSend = 0; outgoing = null;
-                nextHello = nextSnapshot = nextBatch = nextCreatures = 0;
-            }
+            if (world != current) { Reset(); world = current; }
+            if (!host.Catalog.Ready || !host.Tracking.Ready) return;
+            active = true;
             float now = Time.realtimeSinceStartup;
+            if (advertised != Announcement) { advertised = Announcement; nextHello = now; }
+            ProcessIncoming(now);
+            if (now >= nextSnapshot)
+            {
+                discoveries = host.ShareMarkers.Value ? host.Tracking.OwnDiscoveries() : new List<MarkerRecord>();
+                nextSnapshot = now + 2;
+            }
+            if (!host.ShareCreatures.Value) { creatures.Clear(); foreach (var peer in peers.Values) peer.Creatures.Reset(); }
+            else if (now >= nextCreatureSnapshot)
+            { creatures = host.Tracking.OwnCreatures(); nextCreatureSnapshot = now + 0.5f; }
+            // Pause mod traffic rather than appending it behind native game synchronization.
+            if (now < nextSend || Congested()) return;
+            long controlPeer = 0; Control controlValue = null;
+            foreach (var control in controls) { controlPeer = control.Key; controlValue = control.Value; break; }
+            if (controlValue != null)
+            {
+                if (Send(controlPeer, controlValue.Method, controlValue.Value, now, null)) controls.Remove(controlPeer);
+                return;
+            }
             if (now >= nextHello)
             {
-                // Only compatibility announcements are broadcast; marker data goes to confirmed mod users.
-                rpc.InvokeRoutedRPC(ZRoutedRpc.Everybody, Hello, "1:" + world);
-                rpc.InvokeRoutedRPC(ZRoutedRpc.Everybody, TargetHello, "1:" + world);
-                nextHello = now + 15;
+                if (Send(ZRoutedRpc.Everybody, Hello, Announcement, now, null)) nextHello = now + 30;
+                return;
             }
-            if (!host.Enabled.Value || !host.ShareMarkers.Value) { outgoing = null; creatureDelta.Reset(); return; }
-            if (peers.Count == 0) return;
-            if (!host.ShareCreatures.Value) creatureDelta.Reset();
-            if (host.ShareCreatures.Value && now >= nextCreatures)
+            if (order.Count == 0) return;
+            for (int i = 0, count = order.Count; i < count && order.Count > 0; i++)
             {
-                var creatures = host.Tracking.OwnCreatures();
-                foreach (var peer in peers)
+                if (cursor >= order.Count) cursor = 0;
+                long id = order[cursor++]; var peer = peers[id];
+                if (now - peer.Seen > 90) { RemovePeer(id); continue; }
+                if (!peer.Budget.Allows(512, now) || !budget.Allows(512, now)) continue;
+                if (peer.Pending != null)
                 {
-                    if (now - peer.Value > 60) continue;
-                    var changed = creatureDelta.Select(peer.Key, creatures, now);
-                    for (int start = 0; start < changed.Count; start += 64)
+                    if (peer.Pending.kind == "creatures" && !host.ShareCreatures.Value ||
+                        peer.Pending.kind == "discoveries" && !host.ShareMarkers.Value)
+                    { peer.Pending = null; peer.PendingJson = null; peer.Creatures.Reset(); }
+                    else
                     {
-                        var creatureBatch = new MarkerFile { world = world };
-                        for (int i = start; i < Math.Min(start + 64, changed.Count); i++) creatureBatch.markers.Add(changed[i]);
-                        rpc.InvokeRoutedRPC(peer.Key, Creatures, DataJson.Write(creatureBatch));
+                        if (now - peer.Attempt < 8) continue;
+                        if (Send(id, Data, peer.PendingJson, now, peer)) peer.Attempt = now;
+                        return;
                     }
                 }
-                nextCreatures = now + 0.5f;
-            }
-            if (outgoing == null && now >= nextSnapshot)
-            {
-                outgoing = host.Tracking.OwnDiscoveries(); cursor = 0; nextSnapshot = now + 30;
-            }
-            if (outgoing == null || now < nextBatch) return;
-            var batch = new MarkerFile { world = world, character = Player.m_localPlayer.GetPlayerID().ToString() };
-            int end = Math.Min(cursor + 64, outgoing.Count);
-            for (; cursor < end; cursor++) batch.markers.Add(outgoing[cursor]);
-            if (batch.markers.Count > 0)
-            {
-                string json = DataJson.Write(batch);
-                if (json.IndexOf("\"markers\"", StringComparison.Ordinal) < 0) throw new InvalidOperationException("Sharing serializer omitted markers.");
-                var expired = new List<long>();
-                foreach (var peer in peers)
+                var packet = new SharingPacket { world = world, session = session, sequence = peer.NextSequence };
+                if (peer.Target != null && peer.AcceptsTargets) { packet.kind = "target"; packet.target = peer.Target; }
+                else
                 {
-                    if (now - peer.Value > 60) expired.Add(peer.Key);
-                    else rpc.InvokeRoutedRPC(peer.Key, Data, json);
+                    if (!peer.AcceptsDiscoveries) continue;
+                    bool live = host.ShareCreatures.Value && peer.NextCreatures;
+                    if (!host.ShareMarkers.Value) live = true;
+                    if (!host.ShareMarkers.Value && !host.ShareCreatures.Value) continue;
+                    peer.NextCreatures = !peer.NextCreatures;
+                    packet.markers = (live ? peer.Creatures : peer.Static).Select(live ? creatures : discoveries, now, live);
+                    if (packet.markers.Count == 0) continue;
+                    packet.kind = live ? "creatures" : "discoveries";
                 }
-                foreach (long peer in expired) { peers.Remove(peer); creatureDelta.RemovePeer(peer); }
+                string json = DataJson.WriteNetwork(packet);
+                while (Encoding.UTF8.GetByteCount(json) > SharingBudget.PacketBytes && packet.markers?.Count > 1)
+                { packet.markers.RemoveAt(packet.markers.Count - 1); json = DataJson.WriteNetwork(packet); }
+                if (Encoding.UTF8.GetByteCount(json) > SharingBudget.PacketBytes || !Send(id, Data, json, now, peer)) continue;
+                peer.Pending = packet; peer.PendingJson = json; peer.Attempt = now;
+                peer.NextSequence++;
+                if (packet.kind == "target") peer.Target = null;
+                return;
             }
-            nextBatch = now + 0.25f;
-            if (cursor >= outgoing.Count) outgoing = null;
+        }
+        private static bool Congested()
+        {
+            foreach (var peer in ZNet.instance.GetPeers())
+                if (peer.IsReady() && peer.m_socket != null && peer.m_socket.GetSendQueueSize() >= SharingBudget.SocketQueueBytes) return true;
+            return false;
+        }
+        private bool Send(long destination, string method, string json, float now, SharingPeer peer)
+        {
+            int bytes = Encoding.UTF8.GetByteCount(json) + SharingBudget.EnvelopeBytes;
+            if (!budget.Allows(bytes, now) || peer != null && !peer.Budget.Allows(bytes, now)) return false;
+            rpc.InvokeRoutedRPC(destination, method, json);
+            budget.Spend(bytes); peer?.Budget.Spend(bytes); nextSend = now + 0.1f;
+            return true;
         }
         private bool SameWorld(long sender, string announcement)
         {
-            return Player.m_localPlayer != null && sender != ZNet.GetUID() && world != null && announcement == "1:" + world;
+            if (!Interested || Player.m_localPlayer == null || sender == ZNet.GetUID() || world == null ||
+                announcement == null || announcement.Length > 80) return false;
+            var parts = announcement.Split(':');
+            return parts.Length == 5 && parts[0] == "2" && parts[1] == world && Guid.TryParseExact(parts[2], "N", out _) &&
+                (parts[3] == "0" || parts[3] == "1") && (parts[4] == "0" || parts[4] == "1");
+        }
+        private void Remember(long sender, string announcement)
+        {
+            string remoteSession = announcement.Split(':')[2];
+            if (peers.TryGetValue(sender, out var previous) && previous.Session != remoteSession) RemovePeer(sender);
+            if (!peers.TryGetValue(sender, out var peer))
+            {
+                if (peers.Count >= 32) return;
+                peers.Add(sender, peer = new SharingPeer()); order.Add(sender);
+            }
+            peer.Session = remoteSession;
+            bool receives = announcement[announcement.Length - 3] == '1';
+            if (receives && !peer.AcceptsDiscoveries) { peer.Static.Reset(); peer.Creatures.Reset(); }
+            peer.AcceptsDiscoveries = receives; peer.AcceptsTargets = announcement[announcement.Length - 1] == '1';
+            // Presence refreshes never invalidate acknowledged deltas.
+            peer.Seen = Time.realtimeSinceStartup;
         }
         private void ReceiveHello(long sender, string announcement)
         {
             if (!SameWorld(sender, announcement)) return;
-            peers[sender] = Time.realtimeSinceStartup;
-            rpc.InvokeRoutedRPC(sender, Ack, announcement);
-            nextSnapshot = 0;
+            Remember(sender, announcement);
+            if (peers.ContainsKey(sender) && !controls.ContainsKey(sender)) controls[sender] = new Control { Method = Ack, Value = Announcement };
         }
         private void ReceiveAck(long sender, string announcement)
-        {
-            if (!SameWorld(sender, announcement)) return;
-            peers[sender] = Time.realtimeSinceStartup; nextSnapshot = 0;
-        }
-        private void ReceiveTargetHello(long sender, string announcement)
-        {
-            if (!SameWorld(sender, announcement)) return;
-            targetPeers[sender] = Time.realtimeSinceStartup;
-            rpc.InvokeRoutedRPC(sender, TargetAck, announcement);
-        }
-        private void ReceiveTargetAck(long sender, string announcement)
-        {
-            if (SameWorld(sender, announcement)) targetPeers[sender] = Time.realtimeSinceStartup;
-        }
+        { if (SameWorld(sender, announcement)) Remember(sender, announcement); }
         internal void SendNavigationTarget(Vector3 position, string name, string type = null, string objectId = null)
         {
+            float now = Time.realtimeSinceStartup;
             var target = new NavigationShare { world = world, name = NavigationShare.Caption(name), position = position, type = type, objectId = objectId };
-            float now = Time.realtimeSinceStartup;
             if (rpc == null || now < nextTargetSend || !NavigationShare.Allowed(target, world, host.Enabled.Value, host.ShareMarkers.Value)) return;
-            string json = DataJson.Write(target);
-            foreach (var peer in targetPeers)
-                if (now - peer.Value <= 60) rpc.InvokeRoutedRPC(peer.Key, TargetData, json);
-            host.Tracking.Discoveries.SelectSharedTarget(Minimap.instance, target.position, target.name, target.type, target.objectId);
+            foreach (var peer in peers.Values) if (now - peer.Seen <= 90 && peer.AcceptsTargets) peer.Target = target;
+            host.Tracking.Discoveries.SelectSharedTarget(Minimap.instance, position, target.name, type, objectId);
             nextTargetSend = now + 0.5f;
-        }
-        private void ReceiveTarget(long sender, string json)
-        {
-            float now = Time.realtimeSinceStartup;
-            if (!host.Enabled.Value || !host.ShareMarkers.Value || world == null || !targetPeers.TryGetValue(sender, out var seen) ||
-                now - seen > 60 || string.IsNullOrEmpty(json) || json.Length > 4096 ||
-                (lastTargetReceived.TryGetValue(sender, out var previous) && now - previous < 0.5f)) return;
-            try
-            {
-                var target = DataJson.Read<NavigationShare>(json);
-                if (!NavigationShare.Allowed(target, world, host.Enabled.Value, host.ShareMarkers.Value)) return;
-                lastTargetReceived[sender] = now;
-                host.Tracking.Discoveries.SelectSharedTarget(Minimap.instance, target.position, NavigationShare.Caption(target.name), target.type, target.objectId);
-            }
-            catch (Exception e) { host.Report("Shared navigation target ignored", e); }
         }
         private void ReceiveData(long sender, string json)
         {
-            if (!host.Enabled.Value || world == null || !peers.ContainsKey(sender) || string.IsNullOrEmpty(json) || json.Length > 262144) return;
-            try
-            {
-                var file = DataJson.Read<MarkerFile>(json);
-                if (file == null || file.schema != 1 || file.world != world || file.markers == null || file.markers.Count > 64) return;
-                host.Tracking.ReceiveDiscoveries(sender, file.markers);
-            }
-            catch (Exception e) { host.Report("Shared discovery batch ignored", e); }
+            if (!Interested || world == null || !peers.TryGetValue(sender, out var peer) || Time.realtimeSinceStartup - peer.Seen > 90) return;
+            inbox.Enqueue(sender, json);
         }
-        private void ReceiveCreatures(long sender, string json)
+        private void ReceiveProcessed(long sender, string value)
         {
-            if (!host.Enabled.Value || world == null || !peers.ContainsKey(sender) || string.IsNullOrEmpty(json) || json.Length > 262144) return;
+            if (!Interested || world == null || !peers.TryGetValue(sender, out var peer)) return;
+            string prefix = world + ":" + session + ":" + peer.Session + ":";
+            if (value == null || value.Length > 128 || !value.StartsWith(prefix, StringComparison.Ordinal) ||
+                !int.TryParse(value.Substring(prefix.Length), out var sequence)) return;
+            if (peer.Confirm(sequence, Time.realtimeSinceStartup)) peer.Seen = Time.realtimeSinceStartup;
+        }
+        private void ProcessIncoming(float now)
+        {
+            var item = inbox.Take();
+            if (item == null || !peers.TryGetValue(item.Peer, out var peer)) return;
             try
             {
-                var file = DataJson.Read<MarkerFile>(json);
-                if (file == null || file.schema != 1 || file.world != world || file.markers == null || file.markers.Count > 64) return;
-                host.Tracking.ReceiveCreatures(sender, file.markers);
+                var packet = DataJson.Read<SharingPacket>(item.Json);
+                if (packet == null || packet.schema != 2 || packet.world != world || packet.session != peer.Session || packet.sequence <= 0) return;
+                if (packet.sequence > peer.LastReceived)
+                {
+                    if (packet.kind == "target")
+                    {
+                        if (host.ShareMarkers.Value)
+                        {
+                            if (!NavigationShare.Allowed(packet.target, world, host.Enabled.Value, true)) return;
+                            var target = packet.target;
+                            host.Tracking.Discoveries.SelectSharedTarget(Minimap.instance, target.position, NavigationShare.Caption(target.name), target.type, target.objectId);
+                        }
+                    }
+                    else
+                    {
+                        if (packet.markers == null || packet.markers.Count > 8 ||
+                            (packet.kind != "discoveries" && packet.kind != "creatures")) return;
+                        if (host.OtherPlayerPins.Value)
+                        {
+                            if (packet.kind == "discoveries") host.Tracking.ReceiveDiscoveries(item.Peer, packet.markers);
+                            else host.Tracking.ReceiveCreatures(item.Peer, packet.markers);
+                        }
+                    }
+                    peer.LastReceived = packet.sequence;
+                }
+                peer.Seen = now; controls[item.Peer] = new Control { Method = Processed, Value = world + ":" + packet.session + ":" + session + ":" + packet.sequence };
             }
-            catch (Exception e) { host.Report("Shared creature batch ignored", e); }
+            catch (Exception) { /* Discard malformed input without flooding the game log. */ }
+        }
+        private void RemovePeer(long id) { peers.Remove(id); order.Remove(id); controls.Remove(id); }
+        private void Reset()
+        {
+            world = null; active = false; peers.Clear(); order.Clear(); controls.Clear(); inbox.Clear();
+            discoveries.Clear(); creatures.Clear(); cursor = 0; budget = NewBudget();
+            session = Guid.NewGuid().ToString("N"); advertised = null; nextHello = nextSnapshot = nextCreatureSnapshot = nextSend = nextTargetSend = 0;
         }
     }
 }

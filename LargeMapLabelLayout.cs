@@ -67,7 +67,6 @@ namespace MapTracker
             for (int i = 0; i < candidates.Count; i++)
             {
                 var record = candidates[i]; record.largeNameShown = shown[i + 1];
-                record.pin.m_NamePinData.PinNameGameObject.SetActive(record.largeNameShown);
             }
         }
     }

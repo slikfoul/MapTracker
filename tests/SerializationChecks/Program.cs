@@ -205,25 +205,29 @@ Check(mobDuplicateA.position.x == remoteMobUpdate.position.x && mobDuplicateA.cr
 Check(!(bool)sharingHandoff.Invoke(null, new object[] { mobDuplicateB, 101f }) && !mobDuplicateB.shared &&
     !(bool)sharingHandoff.Invoke(null, new object[] { ownEntrance, 25f }),
     "creature handoff requires a fresh observer and never converts static discoveries");
-var deltaType = typeof(MarkerFile).Assembly.GetType("MapTracker.CreatureNetworkDelta");
+var deltaType = typeof(MarkerFile).Assembly.GetType("MapTracker.SharingDelta");
 var delta = Activator.CreateInstance(deltaType, true);
 var deltaSelect = deltaType.GetMethod("Select", recordFlags);
+var deltaCommit = deltaType.GetMethod("Commit", recordFlags);
 var transmissionRecords = new List<MarkerRecord> { mobDuplicateA, mobDuplicateB };
-int DeltaCount(long peer, float time) => ((List<MarkerRecord>)deltaSelect.Invoke(delta, new object[] { peer, transmissionRecords, time })).Count;
-Check(DeltaCount(1, 0) == 2 && DeltaCount(1, 0.5f) == 0 && DeltaCount(1, 1) == 0,
-    "stationary creature snapshots are sent once rather than repeated every half second");
-Check(DeltaCount(2, 1) == 2 && DeltaCount(1, 1.5f) == 2,
-    "new peers get an initial snapshot and stationary creatures retain periodic freshness heartbeats");
-mobDuplicateA.position += new Vector3(0.1f, 0, 0);
-Check(DeltaCount(1, 2) == 1, "a moving creature transmits its new position without resending unchanged neighbors");
+List<MarkerRecord> SelectDelta(float time) => (List<MarkerRecord>)deltaSelect.Invoke(delta, new object[] { transmissionRecords, time, true });
+int CommitDelta(float time) { var result = SelectDelta(time); deltaCommit.Invoke(delta, new object[] { result, time }); return result.Count; }
+Check(SelectDelta(0).Count == 2 && SelectDelta(0.5f).Count == 2,
+    "unacknowledged creature packets remain eligible rather than losing their updates");
+Check(CommitDelta(0.5f) == 2 && SelectDelta(1).Count == 0,
+    "acknowledged stationary creatures suppress redundant transmissions");
+Check(CommitDelta(3.5f) == 2, "stationary creatures retain a bounded freshness heartbeat");
+mobDuplicateA.position += new Vector3(0.2f, 0, 0);
+Check(CommitDelta(4) == 1, "a moving creature transmits its new position without resending unchanged neighbors");
 mobDuplicateB.creatureLevel = 3;
-Check(DeltaCount(1, 2.5f) == 1, "a creature level change is transmitted before its heartbeat");
+Check(CommitDelta(4.5f) == 1, "a creature level change is transmitted before its heartbeat");
 mobDuplicateA.creatureRelation = 4;
-Check(DeltaCount(1, 2.6f) == 1, "taming or relationship changes are transmitted before the heartbeat");
-deltaType.GetMethod("RemovePeer", recordFlags).Invoke(delta, new object[] { 1L });
-Check(DeltaCount(1, 2.7f) == 2, "a returning peer receives all current creatures after its transmission cache is retired");
+Check(CommitDelta(4.6f) == 1, "taming or relationship changes are transmitted before the heartbeat");
+var freshPeerDelta = Activator.CreateInstance(deltaType, true);
+Check(((List<MarkerRecord>)deltaSelect.Invoke(freshPeerDelta, new object[] { transmissionRecords, 4.7f, true })).Count == 2,
+    "a new peer receives all current creatures independently of another peer's acknowledgements");
 deltaType.GetMethod("Reset", recordFlags).Invoke(delta, null);
-Check(DeltaCount(2, 2.8f) == 2, "turning creature transmission off clears its delta state for later re-enabling");
+Check(SelectDelta(4.8f).Count == 2, "turning creature transmission off clears its delta state for later re-enabling");
 
 var reconciliationType = typeof(MarkerFile).Assembly.GetType("MapTracker.PortalReconciliation");
 var reconciliationCheck = reconciliationType.GetMethod("Check", recordFlags);
@@ -837,3 +841,64 @@ string transientNameJson = DataJson.Write(new MarkerFile { markers = new List<Ma
 Check(!transientNameJson.Contains("nameGroupMembers") && !transientNameJson.Contains("nameGroupScreen") &&
     DataJson.Read<MarkerFile>(transientNameJson).markers.Count == 2,
     "temporary name clusters never serialize cyclic UI references into character discoveries");
+
+var indexAdd = indexType.GetMethod("Add", recordFlags);
+var indexFind = indexType.GetMethod("Find", recordFlags);
+var indexRemove = indexType.GetMethod("Remove", recordFlags);
+var movable = SharedRecord("index-movable", sharedPortalEntry, new Vector3(200, 0, 300));
+var movingIndex = Activator.CreateInstance(indexType, recordFlags, null, new object[] { new[] { movable } }, null);
+Vector3 formerPosition = movable.position;
+movable.position = new Vector3(600, 0, 700);
+indexAdd.Invoke(movingIndex, new object[] { movable });
+Check(indexFind.Invoke(movingIndex, new object[] { movable.type, formerPosition }) == null &&
+    ReferenceEquals(indexFind.Invoke(movingIndex, new object[] { movable.type, movable.position }), movable),
+    "incremental spatial index moves records without retaining their old locations");
+movable.type = "legacy-alias";
+indexAdd.Invoke(movingIndex, new object[] { movable });
+Check(ReferenceEquals(indexFind.Invoke(movingIndex, new object[] { movable.type, movable.position }), movable) &&
+    ReferenceEquals(indexFind.Invoke(movingIndex, new object[] { sharedPortalEntry.key, movable.position }), movable),
+    "incremental index preserves imported and canonical type aliases");
+indexRemove.Invoke(movingIndex, new object[] { movable });
+Check(indexFind.Invoke(movingIndex, new object[] { movable.type, movable.position }) == null &&
+    indexFind.Invoke(movingIndex, new object[] { sharedPortalEntry.key, movable.position }) == null,
+    "retiring an indexed object releases both spatial aliases");
+
+var archived = Enumerable.Range(0, 18000).Select(i => SharedRecord("archive:" + i, sharedPortalEntry,
+    new Vector3(i % 180 * 8, 0, i / 180 * 8))).ToList();
+var retainedIndex = Activator.CreateInstance(indexType, recordFlags, null, new object[] { archived }, null);
+Action<MarkerRecord> updateIndex = (Action<MarkerRecord>)indexAdd.CreateDelegate(typeof(Action<MarkerRecord>), retainedIndex);
+var activeRecords = archived.Take(200).ToArray();
+// Compare repeated reconstruction against incremental updates of the actual index.
+long gcBefore = GC.GetAllocatedBytesForCurrentThread();
+var benchmark = System.Diagnostics.Stopwatch.StartNew();
+for (int pass = 0; pass < 30; pass++) Activator.CreateInstance(indexType, recordFlags, null, new object[] { archived }, null);
+benchmark.Stop();
+long rebuildBytes = GC.GetAllocatedBytesForCurrentThread() - gcBefore;
+double rebuildMilliseconds = benchmark.Elapsed.TotalMilliseconds;
+gcBefore = GC.GetAllocatedBytesForCurrentThread(); benchmark.Restart();
+for (int pass = 0; pass < 30; pass++) foreach (var record in activeRecords) updateIndex(record);
+benchmark.Stop();
+long incrementalBytes = GC.GetAllocatedBytesForCurrentThread() - gcBefore;
+Check(incrementalBytes < rebuildBytes / 100,
+    "an eighteen-thousand-record archive needs no repeated index allocation for unchanged active objects");
+System.Console.WriteLine($"INDEX BENCHMARK: rebuild30={rebuildMilliseconds:0.00}ms/{rebuildBytes}bytes; incremental30={benchmark.Elapsed.TotalMilliseconds:0.00}ms/{incrementalBytes}bytes. This is a managed-code benchmark, not in-game FPS.");
+
+var startupRecords = archived.ToDictionary(r => r.id);
+var oldDuplicate = SharedRecord("zz-startup-duplicate", sharedPortalEntry, archived[0].position);
+oldDuplicate.completed = true;
+startupRecords.Add(oldDuplicate.id, oldDuplicate);
+int cleanupChanges = 0;
+var incrementalCleanup = sharingType.GetMethod("RemoveDuplicatesIncrementally", lifetimeFlags);
+var cleanupSteps = ((IEnumerable<byte>)incrementalCleanup.Invoke(null,
+    new object[] { startupRecords, removePin, (Action)(() => cleanupChanges++), null })).GetEnumerator();
+int cleanupItems = 0;
+Check(cleanupSteps.MoveNext() && cleanupChanges == 0 && startupRecords.Count == 18001,
+    "startup cleanup yields before processing the entire archive");
+cleanupItems++;
+while (cleanupSteps.MoveNext()) cleanupItems++;
+cleanupSteps.Dispose();
+Check(cleanupItems == 18001 && cleanupChanges == 1 && startupRecords.Count == 18000 &&
+    archived[0].completed && !startupRecords.ContainsKey(oldDuplicate.id),
+    "incremental startup reconciliation processes each record once and preserves merged completion state");
+Check(!cleanupSteps.MoveNext() && cleanupChanges == 1,
+    "completed duplicate reconciliation cannot repeatedly remove or merge records");

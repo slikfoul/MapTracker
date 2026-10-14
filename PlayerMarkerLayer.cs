@@ -37,15 +37,18 @@ namespace MapTracker
                 {
                     // Raise the arrow alone. Reordering its ancestor could move
                     // the opaque map image over every label in a modded hierarchy.
-                    canvas.overrideSorting = true; canvas.sortingOrder = parentCanvas.sortingOrder + 1;
-                    canvas.sortingLayerID = parentCanvas.sortingLayerID;
+                    if (!canvas.overrideSorting) canvas.overrideSorting = true;
+                    if (canvas.sortingOrder != parentCanvas.sortingOrder + 1) canvas.sortingOrder = parentCanvas.sortingOrder + 1;
+                    if (canvas.sortingLayerID != parentCanvas.sortingLayerID) canvas.sortingLayerID = parentCanvas.sortingLayerID;
                 }
                 else Restore();
             }
             private void Restore()
             {
                 if (canvas == null) return;
-                canvas.overrideSorting = previousOverride; canvas.sortingOrder = previousOrder; canvas.sortingLayerID = previousLayer;
+                if (canvas.overrideSorting != previousOverride) canvas.overrideSorting = previousOverride;
+                if (canvas.sortingOrder != previousOrder) canvas.sortingOrder = previousOrder;
+                if (canvas.sortingLayerID != previousLayer) canvas.sortingLayerID = previousLayer;
             }
             internal void Release()
             {

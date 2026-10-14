@@ -29,7 +29,7 @@ namespace MapTracker
         {
             record.remoteCreaturePosition = incoming.position; record.remoteCreatureLevel = incoming.creatureLevel;
             record.remoteCreatureRelation = incoming.creatureRelation;
-            Observe(record, peer, true, now, 4);
+            Observe(record, peer, true, now, 15);
         }
         internal static bool HandOffCreature(MarkerRecord record, float now)
         {
@@ -57,6 +57,7 @@ namespace MapTracker
             {
                 existing.position = incoming.position; existing.portalTag = incoming.portalTag;
                 existing.completed = incoming.completed; existing.visited = incoming.visited; existing.collected = incoming.collected;
+                existing.pickedTime = incoming.pickedTime;
                 existing.sourcePeer = peer; existing.nameCache = null;
                 if (incoming.entry != null) existing.entry = incoming.entry;
             }
@@ -65,17 +66,25 @@ namespace MapTracker
         }
         internal static bool RemoveDuplicates(IDictionary<string, MarkerRecord> records, Action<MarkerRecord> removePin)
         {
-            var index = new SharedDiscoveryIndex(new MarkerRecord[0]); bool changed = false;
+            bool changed = false;
+            foreach (var step in RemoveDuplicatesIncrementally(records, removePin, () => changed = true)) { }
+            return changed;
+        }
+        internal static IEnumerable<byte> RemoveDuplicatesIncrementally(IDictionary<string, MarkerRecord> records,
+            Action<MarkerRecord> removePin, Action changed, Action<SharedDiscoveryIndex> completed = null)
+        {
+            var index = new SharedDiscoveryIndex(new MarkerRecord[0]);
             foreach (var record in records.Values.Where(r => !r.dynamic && r.entry != null && !r.entry.creature)
                 .OrderBy(r => r.shared).ThenByDescending(r => r.live).ThenBy(r => r.id, StringComparer.Ordinal).ToList())
             {
                 var canonical = index.Find(record.type, record.position);
-                if (canonical == null) { index.Add(record); continue; }
+                if (canonical == null) { index.Add(record); yield return 0; continue; }
                 if (canonical.shared == record.shared)
                 { canonical.visited |= record.visited; canonical.completed |= record.completed; canonical.collected |= record.collected; canonical.favorite |= record.favorite; }
-                canonical.nameCache = null; removePin(record); records.Remove(record.id); changed = true;
+                canonical.nameCache = null; removePin(record); records.Remove(record.id); changed();
+                yield return 0;
             }
-            return changed;
+            completed?.Invoke(index);
         }
     }
 }

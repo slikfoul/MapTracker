@@ -70,6 +70,10 @@ Navigation pauses its arrival check while teleporting or inside a dungeon. Playe
 
 ## Share discoveries and destinations
 
+Sharing requires MapTracker **1.0.1 or later on every participating client**. The bounded sharing protocol does not exchange data with 1.0.0 clients. Update the participating clients together; existing local discoveries and filter settings are preserved.
+
+Discovery sync runs in small acknowledged batches, sends changes instead of restarting the entire database on each presence check, and pauses when the game's outgoing connection is congested. Traffic is capped across all recipients; large discovery databases synchronize gradually in the background. **Share discoveries**, **Share creature positions** and **Other player pins** independently control static transmission, live-creature transmission and reception. When all three are off, MapTracker sends no data, handshakes or acknowledgements. Enabling reception alone uses small control messages to discover peers and acknowledge received packets; it does not forward discoveries.
+
 Participating players need MapTracker installed. Enable **Sharing → Share discoveries** to send static discoveries. Enable **Other player pins** to display received discoveries using your own filters.
 
 Shared dungeons, ore, roots, plants and other static locations merge into your normal discovery set. Discovering the same object together produces one marker. **Keep discovered** retains received locations after the sender leaves or you restart. Fresh ally observations can appear in distant zones outside your own detection radius.

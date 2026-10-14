@@ -17,6 +17,13 @@ namespace MapTracker
         };
         public static string Write(object value, bool pretty = false)
         { return JsonConvert.SerializeObject(value, pretty ? Formatting.Indented : Formatting.None, Settings); }
+        private static readonly JsonSerializerSettings NetworkSettings = new JsonSerializerSettings
+        {
+            TypeNameHandling = TypeNameHandling.None, MaxDepth = 32,
+            DefaultValueHandling = DefaultValueHandling.Ignore,
+            Converters = { new PositionConverter() }
+        };
+        internal static string WriteNetwork(object value) => JsonConvert.SerializeObject(value, Formatting.None, NetworkSettings);
         public static T Read<T>(string json)
         { return JsonConvert.DeserializeObject<T>(json, Settings); }
 

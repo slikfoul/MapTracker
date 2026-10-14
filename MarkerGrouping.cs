@@ -11,10 +11,11 @@ namespace MapTracker
     internal sealed class ClusterBadge
     {
         private TextMeshProUGUI text;
-        internal void Hide() { if (text != null) text.gameObject.SetActive(false); }
+        private int previousCount = -1;
+        internal void Hide() { if (text != null && text.gameObject.activeSelf) text.gameObject.SetActive(false); }
         internal void Show(RectTransform parent, Minimap map, int count)
         {
-            if (text != null && text.transform.parent != parent) UnityEngine.Object.Destroy(text.gameObject);
+            if (text != null && text.transform.parent != parent) { UnityEngine.Object.Destroy(text.gameObject); text = null; previousCount = -1; }
             if (text == null)
             {
                 text = NativeMapText.Create("MapTrackerGroupCount", parent, map);
@@ -25,8 +26,9 @@ namespace MapTracker
                 text.rectTransform.anchoredPosition = Vector2.zero;
                 text.rectTransform.sizeDelta = new Vector2(60, 24);
             }
-            text.transform.SetAsLastSibling(); text.fontSize = count >= 1000 ? 13 : 16;
-            text.gameObject.SetActive(true); text.text = count.ToString();
+            if (text.transform.GetSiblingIndex() != text.transform.parent.childCount - 1) text.transform.SetAsLastSibling();
+            if (!text.gameObject.activeSelf) text.gameObject.SetActive(true);
+            if (previousCount != count) { previousCount = count; text.fontSize = count >= 1000 ? 13 : 16; text.text = count.ToString(); }
         }
     }
     internal sealed class MarkerGrouping : IDisposable
@@ -37,6 +39,7 @@ namespace MapTracker
         private readonly List<MarkerRecord> eligible = new List<MarkerRecord>();
         private readonly List<ClusterPoint> points = new List<ClusterPoint>();
         private readonly HashSet<MarkerRecord> visible = new HashSet<MarkerRecord>();
+        private readonly HashSet<MarkerRecord> badgeOwners = new HashSet<MarkerRecord>();
         private List<List<MarkerRecord>> cachedGroups = new List<List<MarkerRecord>>();
         private float nextBuild, previousZoom;
         private float previousScale;
@@ -60,21 +63,21 @@ namespace MapTracker
         internal bool ShowsDetails(MarkerRecord record) => tooltip != null && tooltip.activeInHierarchy && tooltipMembers != null && tooltipMembers.Contains(record);
         internal void Apply(IEnumerable<MarkerRecord> records, Minimap map, Plugin host, Func<MarkerRecord, string> name)
         {
-            eligible.Clear(); visible.Clear();
+            eligible.Clear(); visible.Clear(); badgeOwners.Clear();
             tooltipMembers = null;
             if (map.m_mode != Minimap.MapMode.Large || host.Window.Open) Close();
             foreach (var record in records)
             {
-                record.group = null; record.badge?.Hide();
+                record.group = null; record.groupHidden = false;
                 var pin = record.pin;
-                if (pin?.m_uiElement == null || !pin.m_uiElement.gameObject.activeInHierarchy) continue;
+                if (pin?.m_uiElement == null || !record.onMap) continue;
                 if (record.favorite || host.Tracking.Discoveries.IsNavigationTarget(record) || !host.GroupMarkers.Value || (record.entry.creature && !host.GroupCreatures.Value)) continue;
                 if (BuiltInFilterPresets.IsPlantMarker(record.entry) && !host.GroupPlants.Value) continue;
                 eligible.Add(record);
                 visible.Add(record);
             }
             if (!host.GroupMarkers.Value || eligible.Count < host.GroupThreshold.Value)
-            { previousCount = -1; Close(); UpdateNames(records, name); return; }
+            { previousCount = -1; Close(); ApplyVisibility(records); return; }
             float scale = map.m_largeRoot.GetComponentInParent<Canvas>()?.rootCanvas.scaleFactor ?? 1;
             var canvas = map.m_largeRoot.GetComponentInParent<Canvas>()?.rootCanvas;
             var camera = canvas != null && canvas.renderMode != RenderMode.ScreenSpaceOverlay ? canvas.worldCamera : null;
@@ -121,11 +124,11 @@ namespace MapTracker
                 }
                 if (representative.badge == null) representative.badge = new ClusterBadge();
                 representative.badge.Show(representative.pin.m_uiElement, map, members.Count);
+                badgeOwners.Add(representative);
                 foreach (var member in members.Skip(1))
                 {
                     if (selectedGroup == representative.id && map.m_mode == Minimap.MapMode.Large) continue;
-                    member.pin.m_uiElement.gameObject.SetActive(false);
-                    if (member.pin.m_NamePinData?.PinNameGameObject != null) member.pin.m_NamePinData.PinNameGameObject.SetActive(false);
+                    member.groupHidden = true;
                 }
                 if (selectedGroup == representative.id && !host.Window.Open && map.m_mode == Minimap.MapMode.Large)
                 {
@@ -134,7 +137,17 @@ namespace MapTracker
                 }
             }
             if (!selectionVisible) Close();
-            UpdateNames(records, name);
+            ApplyVisibility(records);
+        }
+        private void ApplyVisibility(IEnumerable<MarkerRecord> records)
+        {
+            foreach (var record in records)
+            {
+                if (!badgeOwners.Contains(record)) record.badge?.Hide();
+                var icon = record.pin?.m_uiElement;
+                bool show = record.onMap && !record.groupHidden;
+                if (icon != null && icon.gameObject.activeSelf != show) icon.gameObject.SetActive(show);
+            }
         }
         internal void DrawTooltip(Minimap map, Plugin host, Func<MarkerRecord, string> name)
         {
@@ -146,13 +159,13 @@ namespace MapTracker
             if (representative == null) { Close(); return; }
             ShowTooltip(map, host, tooltipMembers, RectTransformUtility.WorldToScreenPoint(camera, representative.position), name);
         }
-        private static void UpdateNames(IEnumerable<MarkerRecord> records, Func<MarkerRecord, string> name)
+        internal void UpdateNames(IEnumerable<MarkerRecord> records, Func<MarkerRecord, string> name)
         {
             foreach (var record in records)
             {
                 var text = record.pin?.m_NamePinData?.PinNameText;
                 if (text == null || record.pin.m_uiElement == null || !record.pin.m_uiElement.gameObject.activeInHierarchy) continue;
-                string label = name(record) + (record.group != null ? " ×" + record.group.Count : "");
+                string label = record.nameGroupMembers != null ? record.nameGroupCaption : name(record) + (record.group != null ? " ×" + record.group.Count : "");
                 if (text.text != label) text.text = label;
             }
         }
@@ -248,6 +261,7 @@ namespace MapTracker
             if (tooltipFrame != null) UnityEngine.Object.Destroy(tooltipFrame);
             tooltipFrame = null;
             tooltip = null; tooltipText = null; cachedGroups.Clear(); previousCount = -1; nextBuild = 0;
+            badgeOwners.Clear(); eligible.Clear(); visible.Clear();
             Close();
         }
     }

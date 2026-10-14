@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.1
+
+- Bandwidth-limited discovery synchronization with acknowledged batches, delta updates and native-connection congestion awareness.
+- Bounded background processing of received discoveries and creature positions.
+- Independent static-discovery, live-creature transmission and reception controls, with network-silent operation when all are disabled.
+- Shared navigation and discovery exchange negotiate each player's reception settings independently.
+- Active-marker rendering, incremental discovery indexing and stable label visibility for large discovery databases.
+- Frame-budgeted startup preparation of saved markers and one-time duplicate reconciliation.
+
 ## 1.0.0
 
 - Track creatures, portals, dungeons, resources, plants, dropped items and other world objects on the minimap and large map.

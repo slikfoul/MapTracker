@@ -38,24 +38,30 @@ namespace MapTracker
 
         internal static bool RemoveDuplicates(IDictionary<string, MarkerRecord> records, Action<MarkerRecord> removePin)
         {
+            bool changed = false;
+            foreach (var step in RemoveDuplicatesIncrementally(records, removePin, () => changed = true)) { }
+            return changed;
+        }
+        internal static IEnumerable<byte> RemoveDuplicatesIncrementally(IDictionary<string, MarkerRecord> records,
+            Action<MarkerRecord> removePin, Action changed)
+        {
             var entrances = records.Values.Where(Eligible)
                 .OrderByDescending(r => r.live).ThenBy(Legacy).ThenBy(r => r.imported)
                 .ThenBy(r => r.id, StringComparer.Ordinal).ToList();
             var retained = new List<MarkerRecord>();
-            bool changed = false;
             foreach (var record in entrances)
             {
                 var survivor = retained.FirstOrDefault(r => SameEntrance(r, record.type, record.position, Legacy(record)));
-                if (survivor == null) { retained.Add(record); continue; }
+                if (survivor == null) { retained.Add(record); yield return 0; continue; }
                 survivor.visited |= record.visited;
                 survivor.completed |= record.completed;
                 survivor.collected |= record.collected;
                 survivor.imported &= record.imported;
                 survivor.favorite |= record.favorite;
                 survivor.nameCache = null;
-                removePin(record); records.Remove(record.id); changed = true;
+                removePin(record); records.Remove(record.id); changed();
+                yield return 0;
             }
-            return changed;
         }
     }
 }

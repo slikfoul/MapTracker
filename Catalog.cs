@@ -123,13 +123,16 @@ namespace MapTracker
                 .Where(p => p != null).GroupBy(p => p.name).Select(g => g.First()).ToList();
             var locations = world.m_locations.Where(l => l.m_enable && l.m_prefab.IsValid).ToList();
             Processed = 0; Total = definitions.Count + locations.Count;
+            long frameStart = System.Diagnostics.Stopwatch.GetTimestamp();
             foreach (GameObject prefab in definitions)
             {
                 if (current != ZNetScene.instance) yield break;
                 try { Add(ReadPrefab(prefab), Prefabs); }
                 catch (Exception e) { warnings.Add(prefab.name + ": " + e.Message); }
                 Status = prefab.name;
-                if (++Processed % 24 == 0) yield return null;
+                Processed++;
+                if (!ScanTimeBudget.WithinBudget(frameStart, host.ScanBudget.Value))
+                { yield return null; frameStart = System.Diagnostics.Stopwatch.GetTimestamp(); }
             }
             foreach (ZoneSystem.ZoneLocation location in locations)
             {
