@@ -41,8 +41,9 @@ namespace MapTracker
     {
         public string id, type, portalTag;
         public UnityEngine.Vector3 position;
-        public bool collected, visited, completed, imported, observed;
+        public bool collected, visited, completed, imported, observed, shared, dynamic;
         public long pickedTime;
+        public long completionRevision, completionAuthor;
         public int creatureLevel, creatureRelation;
     }
     internal static class PlayerNavigation
@@ -66,6 +67,7 @@ namespace MapTracker
         internal FakeDiscoveries Discoveries = new();
         internal List<MarkerRecord> OwnDiscoveries() => new(Static);
         internal List<MarkerRecord> OwnCreatures() => new(Creatures);
+        internal bool Contains(MarkerRecord record) => Static.Contains(record) || Creatures.Contains(record);
         internal void ReceiveDiscoveries(long peer, List<MarkerRecord> records)
         { foreach(var record in records) { Received[record.id]=record; Applied++; } }
         internal void ReceiveCreatures(long peer, List<MarkerRecord> records, int leaseSeconds=30)

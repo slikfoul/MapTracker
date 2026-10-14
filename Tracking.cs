@@ -16,6 +16,7 @@ namespace MapTracker
         public string id, type;
         public Vector3 position;
         public bool collected, visited, completed;
+        public long completionRevision, completionAuthor;
         public long pickedTime;
         public string portalTag;
         public bool imported;
@@ -496,7 +497,8 @@ namespace MapTracker
             return !string.IsNullOrEmpty(record.id) && record.id.Length <= 256 && !string.IsNullOrEmpty(record.type) && record.type.Length <= 256 &&
                 !float.IsNaN(record.position.x) && !float.IsNaN(record.position.y) && !float.IsNaN(record.position.z) &&
                 !float.IsInfinity(record.position.x) && !float.IsInfinity(record.position.y) && !float.IsInfinity(record.position.z) &&
-                Mathf.Abs(record.position.x) <= 20000 && Mathf.Abs(record.position.z) <= 20000 && Mathf.Abs(record.position.y) <= 3000;
+                Mathf.Abs(record.position.x) <= 20000 && Mathf.Abs(record.position.z) <= 20000 && Mathf.Abs(record.position.y) <= 3000 &&
+                record.completionRevision >= 0 && record.completionRevision < long.MaxValue;
         }
         internal void ReceiveDiscoveries(long sender, List<MarkerRecord> incoming)
         {
@@ -517,8 +519,12 @@ namespace MapTracker
                     (existing.position != record.position || existing.portalTag != record.portalTag ||
                      existing.collected != record.collected || existing.visited != record.visited ||
                      existing.completed != record.completed || existing.pickedTime != record.pickedTime);
+                bool wasCompleted = existing?.completed ?? false, wasVisited = existing?.visited ?? false;
+                long completionRevision = existing?.completionRevision ?? 0, completionAuthor = existing?.completionAuthor ?? 0;
                 bool visibilityChange = existing == null || (existing.remoteSeenUntil > Time.realtimeSinceStartup) != record.observed;
                 var merged = SharedDiscoveries.Receive(records, record, sender, Time.realtimeSinceStartup, index);
+                persistentChange |= merged.completed != wasCompleted || merged.visited != wasVisited ||
+                    merged.completionRevision != completionRevision || merged.completionAuthor != completionAuthor;
                 index.Add(merged); remoteStaticRecords.Add(merged);
                 dirty |= persistentChange;
                 if (persistentChange || visibilityChange) { pinChanges.Add(merged); receivedPinChanges = true; }
@@ -852,8 +858,8 @@ namespace MapTracker
             if (toggle) { grouping.Close(); RequestPinRefresh(); }
             if (toggle && closest.entry.dungeon)
             {
-                closest.completed = !closest.completed; closest.shared = false; closest.sourcePeer = 0;
-                dirty = true; RefreshPins(); Save();
+                DungeonProgress.Toggle(closest, Player.m_localPlayer.GetPlayerID()); closest.shared = false; closest.sourcePeer = 0;
+                host.ProgressChanged(closest); dirty = true; pinChanges.Add(closest); RefreshPins(false); Save();
             }
             return false;
         }
@@ -875,7 +881,10 @@ namespace MapTracker
             MarkerRecord closest = records.Values.Where(r => r.entry?.dungeon == true)
                 .OrderBy(r => Vector3.Distance(r.position, entrance.transform.position)).FirstOrDefault();
             if (closest != null && Vector3.Distance(closest.position, entrance.transform.position) < 20f)
-            { closest.visited = true; closest.shared = false; closest.sourcePeer = 0; dirty = true; RefreshPins(); Save(); }
+            {
+                closest.visited = true; closest.shared = false; closest.sourcePeer = 0;
+                host.ProgressChanged(closest); dirty = true; pinChanges.Add(closest); RefreshPins(false); Save();
+            }
         }
         private void Load()
         {

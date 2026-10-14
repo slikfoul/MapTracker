@@ -1009,11 +1009,13 @@ var makeSnapshot=saveType.GetMethod("Snapshot",lifetimeFlags);
 var writeSnapshot=saveType.GetMethod("WriteAsync",lifetimeFlags);
 var savedRecord=SharedRecord("save-check",mineEntry,new Vector3(100,2,300));
 savedRecord.favorite=savedRecord.visited=savedRecord.completed=true;savedRecord.shared=true;savedRecord.sourcePeer=77;
+savedRecord.completionRevision=12;savedRecord.completionAuthor=77;
 var transientRecord=SharedRecord("temporary-creature",mobEntry,Vector3.zero);recordDynamic.SetValue(transientRecord,true);
 var detached=(MarkerFile)makeSnapshot.Invoke(null,new object[]{"save-world","save-character",new[]{savedRecord,transientRecord}});
 savedRecord.position=new Vector3(900,0,900);savedRecord.completed=false;
 Check(detached.markers.Count==1 && detached.markers[0].position.x==100 && detached.markers[0].completed &&
-    detached.markers[0].favorite && detached.markers[0].sourcePeer==77 && recordEntry.GetValue(detached.markers[0])==null,
+    detached.markers[0].favorite && detached.markers[0].sourcePeer==77 && detached.markers[0].completionRevision==12 &&
+    detached.markers[0].completionAuthor==77 && recordEntry.GetValue(detached.markers[0])==null,
     "background persistence uses detached plain-data snapshots, preserving states and excluding live creatures/Unity references");
 string workerFolder=Path.Combine(Environment.CurrentDirectory,"artifacts","MapTrackerSaveChecks-"+Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(workerFolder);
@@ -1033,6 +1035,60 @@ try {
     try{((Task)writeSnapshot.Invoke(null,new object[]{destination,detached})).GetAwaiter().GetResult();}catch(IOException){workerFailed=true;}catch(UnauthorizedAccessException){workerFailed=true;}
     Check(workerFailed&&File.ReadAllText(destination)==intact,"failed background writes leave the previous discovery file intact");
 } finally { Directory.Delete(workerFolder,true); }
+var progressOwn=SharedRecord("progress:own",mineEntry,entrancePosition);
+var progressRemote=SharedRecord("progress:ally",mineEntry,entrancePosition);progressRemote.completed=progressRemote.visited=true;
+var progressRecords=new Dictionary<string,MarkerRecord>{{progressOwn.id,progressOwn}};
+sharingReceive.Invoke(null,new object[]{progressRecords,progressRemote,88L,0f,null});
+Check(progressOwn.completed&&progressOwn.visited&&!progressOwn.shared&&progressRecords.Count==1,
+    "a friend's completed and visited dungeon updates the recipient's existing local entrance without duplicate markers");
+var progressType=typeof(MarkerFile).Assembly.GetType("MapTracker.DungeonProgress");
+var mergeProgress=progressType.GetMethod("Merge",lifetimeFlags);
+var toggleProgress=progressType.GetMethod("Toggle",lifetimeFlags);
+progressOwn.favorite=true;
+progressRemote.completionRevision=1;progressRemote.completionAuthor=88;
+sharingReceive.Invoke(null,new object[]{progressRecords,progressRemote,88L,1f,null});
+Check(progressOwn.completionRevision==1&&progressOwn.completionAuthor==88&&progressOwn.favorite&&!progressOwn.shared,
+    "remote completion revisions merge into local dungeons while preserving local ownership and personal favorites");
+toggleProgress.Invoke(null,new object[]{progressRemote,88L});
+sharingReceive.Invoke(null,new object[]{progressRecords,progressRemote,88L,2f,null});
+Check(!progressOwn.completed&&progressOwn.visited&&progressOwn.completionRevision==2,
+    "a newer manual unmark reaches an already-discovered local dungeon without erasing visit history");
+var delayedProgress=SharedRecord("progress:ally",mineEntry,entrancePosition);delayedProgress.completed=true;
+delayedProgress.completionRevision=1;delayedProgress.completionAuthor=88;
+sharingReceive.Invoke(null,new object[]{progressRecords,delayedProgress,88L,3f,null});
+delayedProgress.completionRevision=0;
+sharingReceive.Invoke(null,new object[]{progressRecords,delayedProgress,88L,4f,null});
+Check(!progressOwn.completed&&progressOwn.completionRevision==2,
+    "older or legacy completed packets cannot restore a mark after a newer manual unmark");
+toggleProgress.Invoke(null,new object[]{progressOwn,99L});
+mergeProgress.Invoke(null,new object[]{progressRemote,progressOwn});
+Check(progressRemote.completed&&progressRemote.completionRevision==3&&progressRemote.completionAuthor==99,
+    "the recipient can mark the shared dungeon again using a logical revision after the received change");
+var simultaneousA=SharedRecord("tie:a",mineEntry,entrancePosition);simultaneousA.completed=true;simultaneousA.completionRevision=5;simultaneousA.completionAuthor=10;
+var simultaneousB=SharedRecord("tie:b",mineEntry,entrancePosition);simultaneousB.completed=false;simultaneousB.completionRevision=5;simultaneousB.completionAuthor=20;
+var tieOne=SharedRecord("tie:one",mineEntry,entrancePosition);var tieTwo=SharedRecord("tie:two",mineEntry,entrancePosition);
+mergeProgress.Invoke(null,new object[]{tieOne,simultaneousA});mergeProgress.Invoke(null,new object[]{tieOne,simultaneousB});
+mergeProgress.Invoke(null,new object[]{tieTwo,simultaneousB});mergeProgress.Invoke(null,new object[]{tieTwo,simultaneousA});
+Check(!tieOne.completed&&!tieTwo.completed&&tieOne.completionAuthor==20&&tieTwo.completionAuthor==20,
+    "concurrent completion changes converge regardless of arrival order without depending on PC clocks");
+var progressSaved=DataJson.Read<MarkerFile>(DataJson.Write(new MarkerFile{markers=new List<MarkerRecord>{progressOwn}})).markers.Single();
+Check(progressSaved.completed&&progressSaved.completionRevision==3&&progressSaved.completionAuthor==99,
+    "completion revision and author survive discovery saving and loading");
+var progressDelta=Activator.CreateInstance(deltaType,true);
+deltaCommit.Invoke(progressDelta,new object[]{new List<MarkerRecord>{progressOwn},0f});
+progressOwn.completionRevision++;
+var progressDeltaPacket=(List<MarkerRecord>)deltaSelect.Invoke(progressDelta,new object[]{new List<MarkerRecord>{progressOwn},1f,false});
+Check(progressDeltaPacket.Count==1&&progressDeltaPacket[0].completionRevision==4&&progressDeltaPacket[0].completionAuthor==99,
+    "a changed completion revision is transmitted even when the boolean returned to its previous value");
+var legacyProgressCopy=SharedRecord("progress:copy",mineEntry,entrancePosition,true);legacyProgressCopy.completed=true;
+progressOwn.completed=false;progressRecords.Add(legacyProgressCopy.id,legacyProgressCopy);
+sharingCleanup.Invoke(null,new object[]{progressRecords,removePin});
+Check(progressRecords.Count==1&&!progressOwn.completed&&progressOwn.completionRevision==4,
+    "mixed local and remote duplicate cleanup preserves the newest explicit unmark");
+var duplicateDungeons=new Dictionary<string,MarkerRecord>{{simultaneousA.id,simultaneousA},{simultaneousB.id,simultaneousB}};
+dungeonCleanup.Invoke(null,new object[]{duplicateDungeons,removePin});
+Check(duplicateDungeons.Count==1&&!duplicateDungeons.Values.Single().completed&&duplicateDungeons.Values.Single().completionAuthor==20,
+    "dungeon-specific saved duplicate reconciliation also preserves the newest completion state");
 if(args.Length==2&&args[0]=="--save-benchmark") {
     var actual=DataJson.Read<MarkerFile>(File.ReadAllText(args[1]));
     var watch=System.Diagnostics.Stopwatch.StartNew();

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.4
+
+- Shared dungeon visit and completion progress for locally discovered entrances.
+- Synchronized manual completion marks and resets with persistent logical revisions.
+- Prioritized dungeon-progress updates within the existing sharing traffic limits.
+
 ## 1.0.3
 
 - Independent bidirectional discovery and creature-sharing channels.

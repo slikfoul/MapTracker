@@ -16,6 +16,7 @@ namespace MapTracker
                 if (!r.dynamic) file.markers.Add(new MarkerRecord {
                     id = r.id, type = r.type, position = r.position, collected = r.collected,
                     visited = r.visited, completed = r.completed, pickedTime = r.pickedTime,
+                    completionRevision = r.completionRevision, completionAuthor = r.completionAuthor,
                     portalTag = r.portalTag, imported = r.imported, favorite = r.favorite,
                     shared = r.shared, observed = r.observed, sourcePeer = r.sourcePeer,
                     creatureLevel = r.creatureLevel, creatureRelation = r.creatureRelation

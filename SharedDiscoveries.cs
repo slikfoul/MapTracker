@@ -58,11 +58,14 @@ namespace MapTracker
             else if (existing.shared)
             {
                 existing.position = incoming.position; existing.portalTag = incoming.portalTag;
-                existing.completed = incoming.completed; existing.visited = incoming.visited; existing.collected = incoming.collected;
+                if (existing.entry?.dungeon != true && incoming.entry?.dungeon != true)
+                { existing.completed = incoming.completed; existing.visited = incoming.visited; }
+                existing.collected = incoming.collected;
                 existing.pickedTime = incoming.pickedTime;
                 existing.sourcePeer = peer; existing.nameCache = null;
                 if (incoming.entry != null) existing.entry = incoming.entry;
             }
+            if (existing.entry?.dungeon == true || incoming.entry?.dungeon == true) DungeonProgress.Merge(existing, incoming);
             Observe(existing, peer, incoming.observed, now, 40);
             return existing;
         }
@@ -82,8 +85,12 @@ namespace MapTracker
                 if (!MarkerLifetime.Current(records, record)) { yield return 0; continue; }
                 var canonical = index.Find(record.type, record.position);
                 if (canonical == null) { index.Add(record); yield return 0; continue; }
+                if (canonical.entry?.dungeon == true) DungeonProgress.Merge(canonical, record);
                 if (canonical.shared == record.shared)
-                { canonical.visited |= record.visited; canonical.completed |= record.completed; canonical.collected |= record.collected; canonical.favorite |= record.favorite; }
+                {
+                    if (canonical.entry?.dungeon != true) { canonical.visited |= record.visited; canonical.completed |= record.completed; }
+                    canonical.collected |= record.collected; canonical.favorite |= record.favorite;
+                }
                 canonical.nameCache = null; MarkerLifetime.Forget(records, record, removePin); changed();
                 yield return 0;
             }

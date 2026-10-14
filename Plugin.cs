@@ -10,7 +10,7 @@ namespace MapTracker
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "Slikfoul.MapTracker";
-        public const string Version = "1.0.3";
+        public const string Version = "1.0.4";
         internal static Plugin Instance;
         internal ConfigEntry<bool> Enabled, SmallMap, LargeMap, OtherPlayerPins;
         internal ConfigEntry<bool> Hostile, Friendly, Animals, Tamed;
@@ -187,6 +187,7 @@ namespace MapTracker
 
         internal void Report(string message, Exception e = null) { Logger.LogWarning(message + (e == null ? "" : ": " + e)); }
         internal void NameDiagnostic(string message) { Logger.LogInfo("Minimap name diagnostic: " + message); }
+        internal void ProgressChanged(MarkerRecord record) { sharing?.PrioritizeDiscovery(record); }
         private void LateUpdate()
         {
             try { Tracking?.KeepSharedPinsHidden(); }

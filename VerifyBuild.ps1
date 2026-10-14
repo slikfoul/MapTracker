@@ -205,6 +205,22 @@ try {
         throw 'Save worker still allocates a whole database-sized JSON string.'
     }
     Write-Output 'PASS: background streamed persistence and world-exit save flushing verified.'
+    $mapClick = $tracking.Methods | Where-Object Name -EQ 'MapClick' | Select-Object -First 1
+    $clickCalls = @($mapClick.Body.Instructions | Where-Object { $_.Operand -is [Mono.Cecil.MethodReference] } | ForEach-Object { $_.Operand.DeclaringType.Name + '.' + $_.Operand.Name })
+    if ($clickCalls -notcontains 'DungeonProgress.Toggle' -or $clickCalls -notcontains 'Plugin.ProgressChanged') {
+        throw 'Dungeon click does not record and prioritize manual completion revisions.'
+    }
+    $receiveProgress = $tracking.Methods | Where-Object Name -EQ 'ReceiveDiscoveries' | Select-Object -First 1
+    foreach ($field in @('completionRevision','completionAuthor','dirty','pinChanges')) {
+        if (-not ($receiveProgress.Body.Instructions | Where-Object { $_.Operand -is [Mono.Cecil.FieldReference] -and $_.Operand.Name -eq $field })) {
+            throw ('Received progress is not integrated into persistence/rendering: '+$field)
+        }
+    }
+    $prioritize = $sharing.Methods | Where-Object Name -EQ 'PrioritizeDiscovery' | Select-Object -First 1
+    if ($prioritize.Body.Instructions | Where-Object { $_.Operand -is [Mono.Cecil.MethodReference] -and $_.Operand.Name -in @('Send','InvokeRoutedRPC') }) {
+        throw 'Priority updates bypass the normal send scheduler.'
+    }
+    Write-Output 'PASS: revisioned dungeon clicks, incremental received-progress persistence/rendering and budgeted priority integration verified.'
 } finally {
     $plugin.Dispose(); $gameAssembly.Dispose(); $guiAssembly.Dispose()
 }

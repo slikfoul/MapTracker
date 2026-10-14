@@ -24,17 +24,45 @@ namespace MapTracker
         private sealed class State { internal MarkerRecord Record; internal float Sent; }
         private readonly Dictionary<string, State> sent = new Dictionary<string, State>();
         private readonly List<string> retired = new List<string>();
+        private readonly Dictionary<string, MarkerRecord> urgent = new Dictionary<string, MarkerRecord>();
+        internal Func<MarkerRecord, bool> Current;
+        internal void Prioritize(MarkerRecord record)
+        {
+            if (!Eligible(record)) return;
+            if (urgent.Count >= 64 && !urgent.ContainsKey(record.id))
+            {
+                string first = null; foreach (var id in urgent.Keys) { first = id; break; }
+                urgent.Remove(first);
+            }
+            urgent[record.id] = record;
+        }
+        private static bool Eligible(MarkerRecord record) => record != null &&
+            !string.IsNullOrEmpty(record.id) && record.id.Length <= 256 && !string.IsNullOrEmpty(record.type) &&
+            record.type.Length <= 256 && (record.portalTag?.Length ?? 0) <= 256;
+        private static bool Selected(List<MarkerRecord> records, string id)
+        { foreach (var record in records) if (record.id == id) return true; return false; }
         private int cursor;
         internal List<MarkerRecord> Select(IReadOnlyList<MarkerRecord> records, float now, bool creatures)
         {
             var result = new List<MarkerRecord>();
+            retired.Clear();
+            foreach (var pair in urgent)
+            {
+                var record = pair.Value;
+                if (pair.Key != record.id || !Eligible(record) || Current != null && !Current(record))
+                { retired.Add(pair.Key); continue; }
+                if (sent.TryGetValue(record.id, out var previous) && Equivalent(previous.Record, record, creatures))
+                { retired.Add(pair.Key); continue; }
+                result.Add(Copy(record)); if (result.Count == 8) break;
+            }
+            foreach (var id in retired) urgent.Remove(id);
+            retired.Clear();
             int examined = Math.Min(records.Count, 128);
             for (int i = 0; i < examined && result.Count < 8; i++)
             {
                 if (cursor >= records.Count) cursor = 0;
                 var record = records[cursor++];
-                if (string.IsNullOrEmpty(record.id) || record.id.Length > 256 || string.IsNullOrEmpty(record.type) ||
-                    record.type.Length > 256 || (record.portalTag?.Length ?? 0) > 256) continue;
+                if (!Eligible(record) || Selected(result, record.id)) continue;
                 if (sent.TryGetValue(record.id, out var previous) && Equivalent(previous.Record, record, creatures) &&
                     now - previous.Sent < (creatures ? 3 : record.observed ? 15 : 120)) continue;
                 result.Add(Copy(record));
@@ -44,9 +72,13 @@ namespace MapTracker
         internal void Commit(IReadOnlyList<MarkerRecord> records, float now)
         {
             // Selection is not delivery. Only receiver acknowledgements commit the cache.
-            foreach (var record in records) sent[record.id] = new State { Record = Copy(record), Sent = now };
+            foreach (var record in records)
+            {
+                sent[record.id] = new State { Record = Copy(record), Sent = now };
+                if (urgent.TryGetValue(record.id, out var waiting) && Equivalent(waiting, record, false)) urgent.Remove(record.id);
+            }
         }
-        internal void Reset() { sent.Clear(); cursor = 0; }
+        internal void Reset() { sent.Clear(); urgent.Clear(); cursor = 0; }
         internal void Prune(ISet<string> current)
         {
             retired.Clear();
@@ -60,11 +92,13 @@ namespace MapTracker
             return a.type == b.type && x * x + y * y + z * z <= (creatures ? 0.01f : 0) &&
                 a.creatureLevel == b.creatureLevel && a.creatureRelation == b.creatureRelation &&
                 a.collected == b.collected && a.visited == b.visited && a.completed == b.completed &&
+                a.completionRevision == b.completionRevision && a.completionAuthor == b.completionAuthor &&
                 a.portalTag == b.portalTag && a.pickedTime == b.pickedTime && a.observed == b.observed && a.imported == b.imported;
         }
         internal static MarkerRecord Copy(MarkerRecord r) => new MarkerRecord {
             id = r.id, type = r.type, position = r.position, collected = r.collected, visited = r.visited,
             completed = r.completed, pickedTime = r.pickedTime, portalTag = r.portalTag, imported = r.imported,
+            completionRevision = r.completionRevision, completionAuthor = r.completionAuthor,
             observed = r.observed, creatureLevel = r.creatureLevel, creatureRelation = r.creatureRelation
         };
     }

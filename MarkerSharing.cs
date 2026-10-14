@@ -159,6 +159,7 @@ namespace MapTracker
             {
                 if (peers.Count >= 32) return;
                 peers.Add(sender, peer = new SharingPeer()); order.Add(sender);
+                peer.Static.Current = host.Tracking.Contains;
             }
             peer.Session = remoteSession;
             bool receivesStatic = announcement[announcement.Length - 3] == '1';
@@ -179,6 +180,11 @@ namespace MapTracker
         }
         private void ReceiveAck(long sender, string announcement)
         { if (SameWorld(sender, announcement)) Remember(sender, announcement); }
+        internal void PrioritizeDiscovery(MarkerRecord record)
+        {
+            if (!Interested || !host.ShareMarkers.Value || record == null || record.shared || record.dynamic || !host.Tracking.Contains(record)) return;
+            foreach (var peer in peers.Values) if (peer.AcceptsDiscoveries) peer.Static.Prioritize(record);
+        }
         internal void SendNavigationTarget(Vector3 position, string name, string type = null, string objectId = null)
         {
             float now = Time.realtimeSinceStartup;

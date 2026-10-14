@@ -274,6 +274,40 @@ static class Checks
             "a delivered pending packet is committed once and releases the send queue");
         foreach(var client in dense.Clients)Check(dense.Sent.Where(s=>s.Source==client.Net.Id).Sum(s=>s.Bytes)<=dense.Now*8192+4224,
             "dense moving-creature and archive synchronization stays inside the unchanged traffic cap for client "+client.Net.Id);
+        var progressSync=new Network(2);
+        progressSync.Clients[0].Host.Tracking.Static=Enumerable.Range(0,10000).Select(Record).ToList();
+        progressSync.Run(3);
+        var progressSender=progressSync.Clients[0];var progressReceiver=progressSync.Clients[1];
+        var clicked=progressSender.Host.Tracking.Static[0];
+        clicked.completed=true;clicked.completionRevision=1;clicked.completionAuthor=42;
+        progressSender.Context();progressSender.Sharing.PrioritizeDiscovery(clicked);
+        progressSync.Run(3);
+        Check(progressReceiver.Host.Tracking.Received[clicked.id].completed&&progressReceiver.Host.Tracking.Received[clicked.id].completionRevision==1,
+            "a manual completion update reaches the peer promptly while ten thousand initial discoveries are still queued");
+        clicked.completed=false;clicked.completionRevision=2;
+        progressSender.Context();progressSender.Sharing.PrioritizeDiscovery(clicked);
+        progressSync.Run(3);
+        Check(!progressReceiver.Host.Tracking.Received[clicked.id].completed&&progressReceiver.Host.Tracking.Received[clicked.id].completionRevision==2,
+            "a subsequent manual unmark is prioritized and carries its persistent revision through the real transport scheduler");
+        int progressBeforeStop=progressSync.Sent.Count(s=>s.Source==1);
+        progressSender.Host.ShareMarkers.Value=false;clicked.completed=true;clicked.completionRevision=3;
+        progressSender.Context();progressSender.Sharing.PrioritizeDiscovery(clicked);progressSync.Run(20);
+        Check(progressSync.Sent.Count(s=>s.Source==1)==progressBeforeStop,
+            "prioritized progress cannot send traffic after sharing is disabled");
+        var priorityBound=new SharingDelta();
+        foreach(var record in Enumerable.Range(0,500).Select(Record))priorityBound.Prioritize(record);
+        var urgentField=typeof(SharingDelta).GetField("urgent",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance);
+        Check(((System.Collections.IDictionary)urgentField.GetValue(priorityBound)).Count==64&&priorityBound.Select(Array.Empty<MarkerRecord>(),0,false).Count==8,
+            "the progress priority queue and selected packet stay bounded under repeated clicks");
+        var pendingProgress=new SharingDelta();var pendingRecord=Record(900);pendingRecord.completionRevision=1;
+        pendingProgress.Prioritize(pendingRecord);var oldPending=pendingProgress.Select(Array.Empty<MarkerRecord>(),0,false);
+        pendingRecord.completed=true;pendingRecord.completionRevision=2;pendingProgress.Commit(oldPending,1);
+        var newestPending=pendingProgress.Select(Array.Empty<MarkerRecord>(),2,false);
+        Check(newestPending.Count==1&&newestPending[0].completionRevision==2&&newestPending[0].completed,
+            "acknowledging an older pending packet cannot drop a newer click queued during delivery");
+        pendingProgress.Current=_=>false;
+        Check(pendingProgress.Select(Array.Empty<MarkerRecord>(),3,false).Count==0&&((System.Collections.IDictionary)urgentField.GetValue(pendingProgress)).Count==0,
+            "retired or replaced dungeon records cannot escape through the priority queue");
         System.Console.WriteLine("Sharing transport checks passed: "+passed);
     }
 }

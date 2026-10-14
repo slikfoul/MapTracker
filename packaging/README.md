@@ -26,7 +26,7 @@ Portals display their tags. Dungeon entrances have distinct symbols, visited sta
 - **Light blue:** visited after entering the dungeon.
 - **Gray with a completion mark:** manually marked as completed.
 
-**Left-click a dungeon marker on the large map** to toggle its completed state. Click it again to remove the mark. If it belongs to a collapsed group, reveal the group first and then click the individual entrance. **Alt + left-click** selects navigation instead of changing completion. Navigation target highlighting takes priority over these state colors.
+**Left-click a dungeon marker on the large map** to toggle its completed state. Click it again to remove the mark. If it belongs to a collapsed group, reveal the group first and then click the individual entrance. **Alt + left-click** selects navigation instead of changing completion. Navigation target highlighting takes priority over these state colors. With **Share discoveries** enabled, dungeon visits and manual completion changes also update entrances already discovered by your friends. Update both clients to **1.0.4 or later** for completion marks and resets to synchronize reliably. Progress changes receive priority within the existing traffic limits; concurrent changes converge using saved logical revisions, independently of PC clocks.
 
 ## Customize both maps
 

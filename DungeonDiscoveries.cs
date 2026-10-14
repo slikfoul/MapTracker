@@ -54,8 +54,7 @@ namespace MapTracker
                 if (!MarkerLifetime.Current(records, record)) { yield return 0; continue; }
                 var survivor = retained.FirstOrDefault(r => MarkerLifetime.Current(records, r) && SameEntrance(r, record.type, record.position, Legacy(record)));
                 if (survivor == null) { retained.Add(record); yield return 0; continue; }
-                survivor.visited |= record.visited;
-                survivor.completed |= record.completed;
+                DungeonProgress.Merge(survivor, record);
                 survivor.collected |= record.collected;
                 survivor.imported &= record.imported;
                 survivor.favorite |= record.favorite;
