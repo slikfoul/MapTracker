@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.5
+
+- Persistent portal captions at close zoom, with upper and lower label placement for crowded large-map markers.
+- Separate black silhouette outlines and thickness controls for non-creature object icons on both maps.
+
+- Location-aware dungeon entrance identity across remembered discoveries and multiplayer synchronization.
+- Retained visit, completion and favorite state when reconciling legacy entrance records.
+
 ## 1.0.4
 
 - Shared dungeon visit and completion progress for locally discovered entrances.

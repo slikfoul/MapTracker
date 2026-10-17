@@ -44,6 +44,8 @@ namespace MapTracker
         public bool collected, visited, completed, imported, observed, shared, dynamic;
         public long pickedTime;
         public long completionRevision, completionAuthor;
+        public UnityEngine.Vector3? dungeonOrigin;
+        public string[] dungeonAliases;
         public int creatureLevel, creatureRelation;
     }
     internal static class PlayerNavigation

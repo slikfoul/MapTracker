@@ -10,6 +10,7 @@ foreach ($field in @('name','version_number','website_url','description','depend
     if ($manifest.PSObject.Properties.Name -notcontains $field) { throw "Missing manifest field: $field" }
 }
 $version = $manifest.version_number
+if ($manifest.website_url -cne 'https://github.com/slikfoul/MapTracker') { throw 'Package website_url must point to the GitHub project; manager update metadata is separate.' }
 if ($manifest.name -cne 'MapTracker' -or $version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') { throw 'Invalid package name/version.' }
 if ($manifest.description.Length -eq 0 -or $manifest.description.Length -gt 250) { throw 'Invalid description length.' }
 if (@($manifest.dependencies).Count -ne 1 -or $manifest.dependencies[0] -cne 'denikson-BepInExPack_Valheim-5.4.2351') { throw 'Unexpected dependencies.' }
@@ -37,6 +38,7 @@ $height = [uint32]$png[20]*16777216 + [uint32]$png[21]*65536 + [uint32]$png[22]*
 if ($width -ne 256 -or $height -ne 256) { throw 'Icon must be 256x256.' }
 $artifacts = Join-Path $PSScriptRoot 'artifacts'
 New-Item -ItemType Directory -Path $artifacts -Force | Out-Null
+& (Join-Path $PSScriptRoot 'WriteGitHubReleaseNotes.ps1')
 $archive = Join-Path $artifacts "Slikfoul-MapTracker-$version.zip"
 $temporary = Join-Path $artifacts ('package-' + [guid]::NewGuid().ToString('N') + '.zip')
 $sources = [ordered]@{

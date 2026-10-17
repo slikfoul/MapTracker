@@ -7,6 +7,7 @@ namespace MapTracker
     internal sealed class DungeonIcon
     {
         private DungeonGraphic graphic;
+        internal Graphic Graphic => graphic;
         internal void Update(Minimap.PinData pin, string prefab)
         {
             if (graphic != null && graphic.transform.parent != pin.m_uiElement) { UnityEngine.Object.Destroy(graphic.gameObject); graphic = null; }

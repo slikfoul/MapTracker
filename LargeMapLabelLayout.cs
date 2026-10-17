@@ -9,8 +9,9 @@ namespace MapTracker
     internal sealed class LargeMapLabelLayout
     {
         private readonly List<LabelBox> boxes = new List<LabelBox>();
+        private readonly List<LabelBox> alternatives = new List<LabelBox>();
         private readonly List<MarkerRecord> candidates = new List<MarkerRecord>();
-        private readonly LabelLayout.Selection selection = new LabelLayout.Selection();
+        private readonly LabelLayout.TwoAnchorSelection selection = new LabelLayout.TwoAnchorSelection();
         private readonly ConditionalWeakTable<TMP_Text, Measure> measurements = new ConditionalWeakTable<TMP_Text, Measure>();
         private sealed class Measure { internal string Name; internal float FontSize; internal Vector2 Size; }
         internal void Apply(IEnumerable<MarkerRecord> records, Minimap map, Plugin host)
@@ -30,12 +31,13 @@ namespace MapTracker
                 RectTransformUtility.RectangleContainsScreenPoint(map.m_mapImageLarge.rectTransform,
                     RectTransformUtility.WorldToScreenPoint(camera, r.pin.m_uiElement.position), camera)) candidates.Add(r);
             }
-            candidates.Sort((a, b) => MarkerPresentation.NameOrder(host.Tracking.Discoveries.IsNavigationTarget(a),
-                Tracking.NearbyNameDistance(a, origin), a.id, host.Tracking.Discoveries.IsNavigationTarget(b), Tracking.NearbyNameDistance(b, origin), b.id));
-            boxes.Clear();
-            boxes.Add(MarkerPresentation.PlayerArea(map, true, camera, scale));
+            // Portals get a persistent caption at close zoom, before ordinary crowd labels.
+            // Navigation targets retain their existing priority.
+            candidates.Sort((a, b) => NameOrder(host.Tracking.Discoveries.IsNavigationTarget(a), a.entry.category == "Portals",
+                Tracking.NearbyNameDistance(a, origin), a.id, host.Tracking.Discoveries.IsNavigationTarget(b), b.entry.category == "Portals",
+                Tracking.NearbyNameDistance(b, origin), b.id));
+            boxes.Clear(); alternatives.Clear();
             var viewport = MarkerPresentation.MapArea(map.m_mapImageLarge.rectTransform, camera);
-            int accepted = 0;
             for (int i = 0; i < candidates.Count; i++)
             {
                 var record = candidates[i];
@@ -58,16 +60,32 @@ namespace MapTracker
                 Vector2 a = RectTransformUtility.WorldToScreenPoint(camera, rect.TransformPoint(center - new Vector3(size.x * 0.5f, size.y * 0.5f)));
                 Vector2 b = RectTransformUtility.WorldToScreenPoint(camera, rect.TransformPoint(center + new Vector3(size.x * 0.5f, size.y * 0.5f)));
                 var bounds = new LabelBox(Mathf.Min(a.x, b.x), Mathf.Min(a.y, b.y), Mathf.Abs(b.x - a.x), Mathf.Abs(b.y - a.y));
-                if (!LabelLayout.Inside(bounds, viewport)) continue;
-                candidates[accepted++] = record;
-                boxes.Add(bounds);
+                var icon = MarkerPresentation.MapArea(record.pin.m_uiElement, camera);
+                var above = new LabelBox(bounds.X, icon.Y + icon.Height + 5 * scale, bounds.Width, bounds.Height);
+                // Preserve grouped-name centres; individual names may use the upper anchor.
+                if (record.nameGroupMembers != null) above = bounds;
+                bool portal = record.entry.category == "Portals";
+                boxes.Add(portal ? above : bounds);
+                alternatives.Add(portal ? bounds : above);
             }
-            candidates.RemoveRange(accepted, candidates.Count - accepted);
-            bool[] shown = selection.Choose(boxes, 4 * scale);
+            int[] shown = selection.Choose(boxes, alternatives, viewport, MarkerPresentation.PlayerArea(map, true, camera, scale), 4 * scale);
             for (int i = 0; i < candidates.Count; i++)
             {
-                var record = candidates[i]; record.largeNameShown = shown[i + 1];
+                var record = candidates[i]; record.largeNameShown = shown[i] >= 0;
+                if (!record.largeNameShown) continue;
+                var chosen = shown[i] == 0 ? boxes[i] : alternatives[i];
+                var text = record.pin.m_NamePinData.PinNameText;
+                Vector2 current = RectTransformUtility.WorldToScreenPoint(camera, text.rectTransform.TransformPoint(text.rectTransform.rect.center));
+                LabelLeader.Move(record.pin.m_NamePinData.PinNameRectTransform, camera,
+                    new Vector2(chosen.X + chosen.Width * 0.5f, chosen.Y + chosen.Height * 0.5f) - current);
             }
+        }
+        internal static int NameOrder(bool aTarget, bool aPortal, float aDistance, string aId,
+            bool bTarget, bool bPortal, float bDistance, string bId)
+        {
+            int order = bTarget.CompareTo(aTarget);
+            if (order == 0) order = bPortal.CompareTo(aPortal);
+            return order != 0 ? order : MarkerPresentation.NameOrder(aTarget, aDistance, aId, bTarget, bDistance, bId);
         }
     }
 }

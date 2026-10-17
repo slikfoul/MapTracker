@@ -4,7 +4,8 @@
     <TargetFramework>net9.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <ManagedDir>G:\Games\SteamLibrary\steamapps\common\Valheim\valheim_Data\Managed</ManagedDir>
-    <CoreDir>$(APPDATA)\Thunderstore Mod Manager\DataFolder\Valheim\profiles\Default\BepInEx\core</CoreDir>
+    <ModProfile Condition="'$(ModProfile)' == ''">$(APPDATA)\r2modmanPlus-local\Valheim\profiles\Default</ModProfile>
+    <CoreDir Condition="'$(CoreDir)' == ''">$(ModProfile)\BepInEx\core</CoreDir>
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="MapTracker"><HintPath>../../bin/Release/MapTracker.dll</HintPath></Reference>

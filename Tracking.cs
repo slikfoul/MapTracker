@@ -25,6 +25,11 @@ namespace MapTracker
         public bool observed;
         public long sourcePeer;
         public int creatureLevel, creatureRelation;
+        // LocationProxy origin is a stable identity; the doorway can be offset/upstairs.
+        [Newtonsoft.Json.JsonProperty(NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
+        public Vector3? dungeonOrigin;
+        [Newtonsoft.Json.JsonProperty(NullValueHandling = Newtonsoft.Json.NullValueHandling.Ignore)]
+        public string[] dungeonAliases;
         [NonSerialized] internal float expiresAt;
         [NonSerialized] internal float remoteSeenUntil;
         [NonSerialized] internal Dictionary<long, float> remoteObservers;
@@ -38,6 +43,7 @@ namespace MapTracker
         [NonSerialized] internal Minimap.PinData pin;
         [NonSerialized] internal CreatureStars stars;
         [NonSerialized] internal DungeonIcon dungeonIcon;
+        [NonSerialized] internal ObjectIconContrast objectContrast;
         [NonSerialized] internal CreatureMapIcon creatureIcon;
         [NonSerialized] internal TargetMarkerHighlight targetHighlight;
         [NonSerialized] internal CreatureNearbyName nearbyName;
@@ -257,6 +263,9 @@ namespace MapTracker
                 if (!host.Catalog.Locations.TryGetValue(zdo.GetInt(ZDOVars.s_location), out entry)) return true;
             }
             else if (!host.Catalog.Prefabs.TryGetValue(zdo.GetPrefab(), out entry)) return true;
+            // LocationProxy parents its instance only after the native spawn completes.
+            // Do not remember/broadcast an empty proxy's temporary root position.
+            if (location && entry.dungeon && view.transform.childCount == 0) return true;
             Character ch = view.GetComponent<Character>();
             if (ch != null && (ch.IsPlayer() || ch.IsDead())) return true;
             // Never scan rooms or resources in interiors; only external entrances are retained.
@@ -269,7 +278,9 @@ namespace MapTracker
             Vector3 position = view.transform.position;
             if (entry.dungeon)
             {
-                Teleport entrance = view.GetComponentsInChildren<Teleport>(true).FirstOrDefault(t => t.transform.position.y < 3000f);
+                var teleports = view.GetComponentsInChildren<Teleport>(true);
+                Teleport entrance = teleports.FirstOrDefault(t => t.gameObject.activeInHierarchy && t.enabled && t.transform.position.y < 3000f);
+                if (location && teleports.Length > 0 && entrance == null) return true;
                 if (entrance != null) position = entrance.transform.position;
             }
             bool visibleNow = false;
@@ -289,7 +300,11 @@ namespace MapTracker
                 if (record != null)
                 {
                     if (records.ContainsKey(record.id))
-                    { records.Remove(record.id); record.id = id; record.type = entry.key; record.entry = entry; }
+                    {
+                        string previousId = record.id;
+                        records.Remove(previousId); record.id = id; record.type = entry.key; record.entry = entry;
+                        if (entry.dungeon) DungeonDiscoveries.RememberAlias(record, previousId);
+                    }
                     dirty = true;
                 }
                 else
@@ -313,6 +328,24 @@ namespace MapTracker
                 if (record.portalTag != tag) { record.portalTag = tag; dirty = presentationChanged = true; }
             }
             if (record.position != position) { record.position = position; presentationChanged = true; if (!dynamic) dirty = true; }
+            if (location && entry.dungeon)
+            {
+                Vector3 origin = view.transform.position;
+                Vector3? validOrigin = Vector3.Distance(origin, position) <= 100f ? (Vector3?)origin : null;
+                if (!Nullable.Equals(record.dungeonOrigin, validOrigin)) { record.dungeonOrigin = validOrigin; dirty = presentationChanged = true; }
+                discoveryIndex?.Add(record);
+                if (discoveryIndex != null && DungeonDiscoveries.Reconcile(records, record, discoveryIndex, ForgetRecord,
+                    candidate => CanMergeDungeon(candidate, origin)))
+                { dirty = presentationChanged = true; newDiscovery = false; }
+                var nativeLocation = view.GetComponentInChildren<Location>(true);
+                if (discoveryIndex != null && nativeLocation != null &&
+                    DungeonDiscoveries.ReconcileOwnedLocation(records, record, discoveryIndex, nativeLocation.GetMaxRadius(),
+                        candidate => CanMergeDungeon(candidate, origin) && !Character.InInterior(candidate.position) &&
+                            Mathf.Abs(candidate.position.y - origin.y) <= nativeLocation.GetMaxRadius() &&
+                            Location.GetLocation(candidate.position) == nativeLocation,
+                        ForgetRecord))
+                { dirty = presentationChanged = true; newDiscovery = false; }
+            }
             if (!dynamic) discoveryIndex?.Add(record);
             bool collected = false;
             Pickable plant = view.GetComponent<Pickable>();
@@ -327,6 +360,17 @@ namespace MapTracker
             if (presentationChanged) { record.nameCache = null; pinChanges.Add(record); }
             if (newDiscovery) Discoveries.Detected(record);
             return true;
+        }
+
+        private bool CanMergeDungeon(MarkerRecord candidate, Vector3 origin)
+        {
+            // A second existing LocationProxy is evidence of another real entrance.
+            // Missing/replaced IDs can be migrated using the observed root/door pair.
+            string[] parts = candidate.id.Split(':');
+            if (parts.Length != 2 || !long.TryParse(parts[0], out long owner) || !uint.TryParse(parts[1], out uint number)) return true;
+            var other = manager?.GetZDO(new ZDOID(owner, number));
+            return other == null || other.GetPrefab() != "LocationProxy".GetStableHashCode() ||
+                DungeonDiscoveries.Close(other.GetPosition(), origin);
         }
 
         private void Destroyed(ZDO zdo)
@@ -494,6 +538,10 @@ namespace MapTracker
         }
         private static bool ValidSharedRecord(MarkerRecord record)
         {
+            if (record.dungeonAliases != null && (record.dungeonAliases.Length > DungeonDiscoveries.MaxAliases ||
+                !record.dungeonOrigin.HasValue || record.dungeonAliases.Any(id => string.IsNullOrEmpty(id) || id.Length > 64))) return false;
+            if (record.dungeonOrigin.HasValue && (!PlayerNavigation.Finite(record.dungeonOrigin.Value) ||
+                Vector3.Distance(record.dungeonOrigin.Value, record.position) > 100f)) return false;
             return !string.IsNullOrEmpty(record.id) && record.id.Length <= 256 && !string.IsNullOrEmpty(record.type) && record.type.Length <= 256 &&
                 !float.IsNaN(record.position.x) && !float.IsNaN(record.position.y) && !float.IsNaN(record.position.z) &&
                 !float.IsInfinity(record.position.x) && !float.IsInfinity(record.position.y) && !float.IsInfinity(record.position.z) &&
@@ -512,18 +560,28 @@ namespace MapTracker
                 if (entry == null && record.imported && record.type.StartsWith("legacy:", StringComparison.Ordinal))
                     entry = host.Catalog.GetLegacyDungeon(record.type.Substring("legacy:".Length));
                 if (entry == null || entry.creature || entry.category == "Dropped items") continue;
+                if (!entry.dungeon) { record.dungeonOrigin = null; record.dungeonAliases = null; }
                 record.entry = entry;
-                var existing = records.TryGetValue(record.id, out var exact) ? exact : index.Find(record.type, record.position);
+                Predicate<MarkerRecord> allow = entry.dungeon && record.dungeonOrigin.HasValue ?
+                    new Predicate<MarkerRecord>(candidate => CanMergeDungeon(candidate, record.dungeonOrigin.Value)) : null;
+                var existing = SharedDiscoveries.Resolve(records, record, index, allow);
                 if (existing != null && (existing.dynamic || existing.type != record.type && existing.entry?.key != record.type)) continue;
-                bool persistentChange = existing == null || existing.shared &&
-                    (existing.position != record.position || existing.portalTag != record.portalTag ||
-                     existing.collected != record.collected || existing.visited != record.visited ||
-                     existing.completed != record.completed || existing.pickedTime != record.pickedTime);
+                int countBefore = records.Count;
+                bool persistentChange = existing == null;
+                string previousTag = existing?.portalTag;
+                bool previousCollected = existing?.collected ?? false;
+                long previousPicked = existing?.pickedTime ?? 0;
                 bool wasCompleted = existing?.completed ?? false, wasVisited = existing?.visited ?? false;
                 long completionRevision = existing?.completionRevision ?? 0, completionAuthor = existing?.completionAuthor ?? 0;
+                Vector3? previousOrigin = existing?.dungeonOrigin, previousPosition = existing?.position;
+                var previousAliases = existing?.dungeonAliases;
                 bool visibilityChange = existing == null || (existing.remoteSeenUntil > Time.realtimeSinceStartup) != record.observed;
-                var merged = SharedDiscoveries.Receive(records, record, sender, Time.realtimeSinceStartup, index);
-                persistentChange |= merged.completed != wasCompleted || merged.visited != wasVisited ||
+                var merged = SharedDiscoveries.ReceiveTracked(records, record, sender, Time.realtimeSinceStartup, index, ForgetRecord, allow);
+                persistentChange |= records.Count != countBefore || !Nullable.Equals(previousOrigin, merged.dungeonOrigin) ||
+                    !SharingDelta.SameAliases(previousAliases, merged.dungeonAliases) ||
+                    !Nullable.Equals(previousPosition, merged.position) || merged.portalTag != previousTag ||
+                    merged.collected != previousCollected || merged.pickedTime != previousPicked ||
+                    merged.completed != wasCompleted || merged.visited != wasVisited ||
                     merged.completionRevision != completionRevision || merged.completionAuthor != completionAuthor;
                 index.Add(merged); remoteStaticRecords.Add(merged);
                 dirty |= persistentChange;
@@ -617,6 +675,12 @@ namespace MapTracker
                     SetPinSize(pin.m_uiElement, size);
                     if (record.dungeonIcon == null) record.dungeonIcon = new DungeonIcon();
                     record.dungeonIcon.Update(pin, record.entry.prefab);
+                }
+                if (!record.entry.creature)
+                {
+                    if (record.objectContrast == null) record.objectContrast = new ObjectIconContrast();
+                    record.objectContrast.Apply(record.entry.dungeon ? record.dungeonIcon.Graphic : pin.m_iconElement,
+                        host.ContrastObjectIcons.Value, host.ObjectOutlineThickness.Value);
                 }
             }
             grouping.Apply(pinnedRecords, map, host, Name);

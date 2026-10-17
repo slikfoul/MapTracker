@@ -1089,6 +1089,153 @@ var duplicateDungeons=new Dictionary<string,MarkerRecord>{{simultaneousA.id,simu
 dungeonCleanup.Invoke(null,new object[]{duplicateDungeons,removePin});
 Check(duplicateDungeons.Count==1&&!duplicateDungeons.Values.Single().completed&&duplicateDungeons.Values.Single().completionAuthor==20,
     "dungeon-specific saved duplicate reconciliation also preserves the newest completion state");
+// Reported save: one completed entrance and two fresh IDs at an offset/upstairs doorway.
+// The root/door association must come from a loaded LocationProxy, never proximity alone.
+var reportedRoot = new Vector3(4218.75f, 39.8153343f, -4610f);
+var reportedDoor = new Vector3(4223.25f, 47.8153343f, -4608f);
+MarkerRecord EntranceRecord(string id, Vector3 position, Vector3? origin = null, bool shared = false)
+{
+    var record = SharedRecord(id, mineEntry, position, shared);
+    record.dungeonOrigin = origin;
+    return record;
+}
+var offsetRecords = new Dictionary<string, MarkerRecord>();
+var oldRoot = EntranceRecord("1:1111896", reportedRoot); oldRoot.completed = oldRoot.visited = oldRoot.favorite = true;
+var oldDoor = EntranceRecord("1:1111913", reportedDoor);
+var observedDoor = EntranceRecord("1:1115683", reportedDoor);
+foreach (var record in new[] { oldRoot, oldDoor, observedDoor }) offsetRecords.Add(record.id, record);
+object IndexFor(Dictionary<string, MarkerRecord> records) => Activator.CreateInstance(indexType, recordFlags, null, new object[] { records.Values }, null);
+var reconcileDungeon = dungeonDiscoveries.GetMethod("Reconcile", lifetimeFlags);
+bool ReconcileEntrance(Dictionary<string, MarkerRecord> records, MarkerRecord current, object index, Predicate<MarkerRecord> allow = null) =>
+    (bool)reconcileDungeon.Invoke(null, new object[] { records, current, index, removePin, allow });
+var offsetIndex = IndexFor(offsetRecords);
+Check(!ReconcileEntrance(offsetRecords, observedDoor, offsetIndex) && offsetRecords.Count == 3,
+    "offset saved positions alone cannot establish one entrance or erase another floor");
+observedDoor.dungeonOrigin = reportedRoot;
+indexType.GetMethod("Add", recordFlags).Invoke(offsetIndex, new object[] { observedDoor });
+Check(ReconcileEntrance(offsetRecords, observedDoor, offsetIndex) && offsetRecords.Count == 1 && offsetRecords[observedDoor.id] == observedDoor &&
+    observedDoor.completed && observedDoor.visited && observedDoor.favorite && removedPins.Contains(oldRoot.id) && removedPins.Contains(oldDoor.id),
+    "observed root/door identity collapses the reported three IDs without losing completion, visits or favorite");
+Check(!ReconcileEntrance(offsetRecords, observedDoor, offsetIndex), "repeated entrance observations do not remove or merge anything twice");
+var originSave = DataJson.Read<MarkerFile>(DataJson.Write(new MarkerFile { markers = offsetRecords.Values.ToList() }));
+Check(originSave.markers.Count == 1 && originSave.markers[0].dungeonOrigin.Value.Equals(reportedRoot) && originSave.markers[0].completed,
+    "entrance origin and merged progress survive production JSON roundtrip");
+var originSnapshot = (MarkerFile)makeSnapshot.Invoke(null, new object[] { "world", "player", offsetRecords.Values });
+Check(originSnapshot.markers.Single().dungeonOrigin.Value.Equals(reportedRoot), "asynchronous save snapshot keeps the entrance identity");
+var copyEntrance = (MarkerRecord)deltaType.GetMethod("Copy", lifetimeFlags).Invoke(null, new object[] { observedDoor });
+Check(copyEntrance.dungeonOrigin.Value.Equals(reportedRoot), "network delta snapshot includes the entrance origin");
+copyEntrance.dungeonOrigin = null;
+Check(!(bool)deltaType.GetMethod("Equivalent", lifetimeFlags).Invoke(null, new object[] { observedDoor, copyEntrance, false }),
+    "learning an entrance origin triggers a bounded delta even when its visible position stays unchanged");
+Check(!DataJson.Write(new MarkerRecord { id = "resource", type = "ore" }).Contains("dungeonOrigin"),
+    "non-dungeon records do not add null identity fields to a large discovery database");
+var distinctRoot = reportedRoot + new Vector3(3, 0, 0);
+var distinctEntrance = EntranceRecord("another-real-entrance", reportedDoor, distinctRoot);
+offsetRecords.Add(distinctEntrance.id, distinctEntrance);
+offsetIndex = IndexFor(offsetRecords);
+Check(!ReconcileEntrance(offsetRecords, observedDoor, offsetIndex) && offsetRecords.Count == 2,
+    "different known location roots remain separate even when their doorway icons overlap");
+var sameRootNewDoor = EntranceRecord("same-root-new-id", reportedDoor + new Vector3(5, 1, 0), reportedRoot, true);
+var receiveOffset = (MarkerRecord)sharingReceive.Invoke(null, new object[] { offsetRecords, sameRootNewDoor, 42L, 1f, offsetIndex });
+Check(receiveOffset == observedDoor && offsetRecords.Count == 2 && !observedDoor.shared && observedDoor.position.Equals(reportedDoor),
+    "shared rediscovery uses the same root while preserving the local doorway position and a neighboring real entrance");
+var oldUnvisited = EntranceRecord("recipient-old-root", reportedRoot);
+var remoteDuplicate = EntranceRecord("sender-live-door", reportedDoor, shared: true);
+remoteDuplicate.completed = true;
+var recipientRecords = new Dictionary<string, MarkerRecord> { { oldUnvisited.id, oldUnvisited }, { remoteDuplicate.id, remoteDuplicate } };
+var freshSharedDoor = EntranceRecord(remoteDuplicate.id, reportedDoor, reportedRoot, true);
+freshSharedDoor.completionRevision = 4; freshSharedDoor.completionAuthor = 99; freshSharedDoor.completed = false; freshSharedDoor.visited = true;
+var receivedCanonical = (MarkerRecord)sharingReceive.Invoke(null, new object[] { recipientRecords, freshSharedDoor, 42L, 2f, IndexFor(recipientRecords) });
+Check(receivedCanonical == oldUnvisited && recipientRecords.Count == 1 && !oldUnvisited.shared && oldUnvisited.visited &&
+    !oldUnvisited.completed && oldUnvisited.completionRevision == 4 && oldUnvisited.dungeonOrigin.Value.Equals(reportedRoot),
+    "received entrance identity repairs preexisting local/remote duplicates and retains the newest explicit completion reset");
+var guardedAlias = EntranceRecord("known-separate-proxy", reportedRoot);
+offsetRecords.Add(guardedAlias.id, guardedAlias);
+Check(!ReconcileEntrance(offsetRecords, observedDoor, IndexFor(offsetRecords), r => r != guardedAlias) && offsetRecords.ContainsKey(guardedAlias.id),
+    "a confirmed separate native LocationProxy vetoes migration of a legacy position alias");
+var reloadRecords = originSave.markers.ToDictionary(r => r.id);
+recordEntry.SetValue(reloadRecords[observedDoor.id], mineEntry);
+var delayedOldPacket = EntranceRecord("old-client-root-id", reportedRoot, shared: true);
+Check((MarkerRecord)sharingReceive.Invoke(null, new object[] { reloadRecords, delayedOldPacket, 42L, 3f, IndexFor(reloadRecords) }) == reloadRecords[observedDoor.id] && reloadRecords.Count == 1,
+    "after restart a delayed old-format root-only packet does not recreate the shifted duplicate");
+var remoteDoor = EntranceRecord("remote-door-anchor", reportedDoor, reportedRoot, true);
+var remoteDoorRecords = new Dictionary<string,MarkerRecord> { { remoteDoor.id, remoteDoor } };
+sharingReceive.Invoke(null, new object[] { remoteDoorRecords, EntranceRecord(remoteDoor.id, reportedRoot, shared: true), 42L, 4f, IndexFor(remoteDoorRecords) });
+Check(remoteDoor.position.Equals(reportedDoor), "an old-format packet cannot move a shared doorway back to its shifted proxy root");
+var protectedLocal = EntranceRecord("real-other-proxy", reportedRoot);
+var protectedRecords = new Dictionary<string,MarkerRecord> { { protectedLocal.id, protectedLocal } };
+Predicate<MarkerRecord> keepActualOther = r => r != protectedLocal;
+var guardedReceive = sharingType.GetMethod("ReceiveTracked", lifetimeFlags);
+var separateIncoming = EntranceRecord("new-actual-location", reportedDoor, reportedRoot, true);
+guardedReceive.Invoke(null, new object[] { protectedRecords, separateIncoming, 42L, 5f, IndexFor(protectedRecords), removePin, keepActualOther });
+Check(protectedRecords.Count == 2 && protectedRecords.ContainsKey(protectedLocal.id),
+    "the receive path also preserves a separately confirmed native proxy instead of rebinding or deleting it");
+// Live 1.0.5 save proved that NEITHER stored marker was the proxy origin.
+var actualMineOrigin = new Vector3(4224f, 36.8153343f, -4608f);
+var actualObservedMine = EntranceRecord("1:1128290", reportedDoor, actualMineOrigin);
+var actualLegacyMine = EntranceRecord("1:1111896", reportedRoot);
+actualLegacyMine.completed = actualLegacyMine.visited = actualLegacyMine.favorite = true;
+var unrelatedLegacyMine = EntranceRecord("unrelated-nearby-mine", reportedRoot + new Vector3(3, 0, 0));
+var confirmedSecondMine = EntranceRecord("known-neighbor-mine", reportedRoot, actualMineOrigin + new Vector3(5, 0, 0));
+var actualMineRecords = new Dictionary<string,MarkerRecord>();
+foreach(var record in new[]{actualObservedMine,actualLegacyMine,unrelatedLegacyMine,confirmedSecondMine}) actualMineRecords.Add(record.id,record);
+var actualMineIndex = IndexFor(actualMineRecords);
+Check(!ReconcileEntrance(actualMineRecords,actualObservedMine,actualMineIndex),
+    "live-reported two-offset marker geometry reproduces the first fix's missing association");
+var reconcileOwned = dungeonDiscoveries.GetMethod("ReconcileOwnedLocation",lifetimeFlags);
+Predicate<MarkerRecord> nativeMineOwner = r => r == actualLegacyMine || r == confirmedSecondMine;
+Check((bool)reconcileOwned.Invoke(null,new object[]{actualMineRecords,actualObservedMine,actualMineIndex,20f,nativeMineOwner,removePin}) &&
+    actualMineRecords.Count==3 && !actualMineRecords.ContainsKey(actualLegacyMine.id) &&
+    actualObservedMine.completed && actualObservedMine.visited && actualObservedMine.favorite &&
+    actualMineRecords.ContainsKey(unrelatedLegacyMine.id) && actualMineRecords.ContainsKey(confirmedSecondMine.id),
+    "native location ownership reconciles both shifted live-save positions while preserving unrelated and confirmed separate mines");
+Check(!(bool)reconcileOwned.Invoke(null,new object[]{actualMineRecords,actualObservedMine,actualMineIndex,20f,nativeMineOwner,removePin}),
+    "native-owner reconciliation is idempotent after retirement");
+var findDungeonAlias = indexType.GetMethod("FindAlias",recordFlags);
+Check((MarkerRecord)findDungeonAlias.Invoke(actualMineIndex,new object[]{actualLegacyMine.id})==actualObservedMine &&
+    actualObservedMine.dungeonAliases.Contains(actualLegacyMine.id),
+    "the retired network ID resolves to the canonical entrance without a proximity search");
+string actualMineJson=DataJson.Write(new MarkerFile{markers=new List<MarkerRecord>{actualObservedMine}});
+var actualMineRestored=DataJson.Read<MarkerFile>(actualMineJson).markers.Single();
+Check(actualMineRestored.dungeonAliases.Single()==actualLegacyMine.id && actualMineRestored.dungeonOrigin.Value.Equals(actualMineOrigin) &&
+    !actualMineJson.Contains("normalized") && !actualMineJson.Contains("magnitude"),
+    "nullable dungeon origins use compact xyz-only serialization and retired IDs persist through restart");
+var explicitNullOrigin=DataJson.Read<MarkerRecord>("{\"id\":\"legacy\",\"dungeonOrigin\":null}");
+Check(!explicitNullOrigin.dungeonOrigin.HasValue,"explicit null and absent legacy origins remain readable");
+var actualAliasReplay = EntranceRecord(actualLegacyMine.id,reportedRoot,shared:true);
+Check((MarkerRecord)sharingReceive.Invoke(null,new object[]{actualMineRecords,actualAliasReplay,42L,7f,actualMineIndex})==actualObservedMine &&
+    actualMineRecords.Count==3 && actualObservedMine.position.Equals(reportedDoor),
+    "a late second player's offset old-ID packet cannot recreate the live-reported duplicate");
+var receivedObserved = EntranceRecord(actualObservedMine.id,reportedDoor,actualMineOrigin,true);
+receivedObserved.dungeonAliases=actualObservedMine.dungeonAliases.ToArray();
+var receiverLegacy=EntranceRecord(actualLegacyMine.id,reportedRoot);
+receiverLegacy.completed=receiverLegacy.visited=true;
+var receiverDatabase=new Dictionary<string,MarkerRecord>{{receiverLegacy.id,receiverLegacy}};
+Check((MarkerRecord)sharingReceive.Invoke(null,new object[]{receiverDatabase,receivedObserved,42L,8f,IndexFor(receiverDatabase)})==receiverLegacy &&
+    receiverDatabase.Count==1 && receiverLegacy.position.Equals(reportedDoor) && receiverLegacy.completed && receiverLegacy.visited &&
+    receiverLegacy.dungeonOrigin.Value.Equals(actualMineOrigin),
+    "a distant peer applies the proven retired-ID association to its old offset discovery and keeps its progress");
+var remoteAliasDatabase=new Dictionary<string,MarkerRecord>{{receivedObserved.id,receivedObserved}};
+sharingReceive.Invoke(null,new object[]{remoteAliasDatabase,actualAliasReplay,42L,9f,IndexFor(remoteAliasDatabase)});
+Check(remoteAliasDatabase.Count==1&&receivedObserved.position.Equals(reportedDoor),
+    "old offset alias packets cannot move an exclusively remote canonical marker back to its legacy position");
+recordEntry.SetValue(actualMineRestored,mineEntry);
+var restartedAliases=new Dictionary<string,MarkerRecord>{{actualMineRestored.id,actualMineRestored}};
+Check((MarkerRecord)sharingReceive.Invoke(null,new object[]{restartedAliases,actualAliasReplay,42L,10f,IndexFor(restartedAliases)})==actualMineRestored && restartedAliases.Count==1,
+    "retired-ID deduplication still works after JSON reload and index reconstruction");
+var aliasCopySource=EntranceRecord("copy-source",reportedDoor,actualMineOrigin);aliasCopySource.dungeonAliases=new[]{"prior-id"};
+var aliasNetworkCopy=(MarkerRecord)deltaType.GetMethod("Copy",lifetimeFlags).Invoke(null,new object[]{aliasCopySource});
+var aliasSaveCopy=((MarkerFile)makeSnapshot.Invoke(null,new object[]{"world","character",new[]{aliasCopySource}})).markers.Single();
+aliasCopySource.dungeonAliases[0]="later-mutation";
+Check(aliasNetworkCopy.dungeonAliases[0]=="prior-id"&&aliasSaveCopy.dungeonAliases[0]=="prior-id",
+    "network and asynchronous save snapshots detach retired-ID arrays from mutable source DTOs");
+var rememberDungeonAlias=dungeonDiscoveries.GetMethod("RememberAlias",lifetimeFlags);
+for(int aliasNumber=0;aliasNumber<100;aliasNumber++)rememberDungeonAlias.Invoke(null,new object[]{aliasCopySource,"old-network-id-"+aliasNumber});
+Check(aliasCopySource.dungeonAliases.Length==8,"retired-ID history stays bounded for storage and traffic");
+var oldUnanchoredPacket=EntranceRecord("no-origin-still-shareable",reportedRoot);
+rememberDungeonAlias.Invoke(null,new object[]{oldUnanchoredPacket,"another-legacy-id"});
+Check(oldUnanchoredPacket.dungeonAliases==null,
+    "unanchored legacy merges cannot create alias metadata that would make ordinary discovery packets invalid");
 if(args.Length==2&&args[0]=="--save-benchmark") {
     var actual=DataJson.Read<MarkerFile>(File.ReadAllText(args[1]));
     var watch=System.Diagnostics.Stopwatch.StartNew();

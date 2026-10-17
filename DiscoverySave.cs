@@ -19,7 +19,8 @@ namespace MapTracker
                     completionRevision = r.completionRevision, completionAuthor = r.completionAuthor,
                     portalTag = r.portalTag, imported = r.imported, favorite = r.favorite,
                     shared = r.shared, observed = r.observed, sourcePeer = r.sourcePeer,
-                    creatureLevel = r.creatureLevel, creatureRelation = r.creatureRelation
+                    creatureLevel = r.creatureLevel, creatureRelation = r.creatureRelation,
+                    dungeonOrigin = r.dungeonOrigin, dungeonAliases = r.dungeonAliases == null ? null : (string[])r.dungeonAliases.Clone()
                 });
             return file;
         }

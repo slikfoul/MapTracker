@@ -93,13 +93,24 @@ namespace MapTracker
                 a.creatureLevel == b.creatureLevel && a.creatureRelation == b.creatureRelation &&
                 a.collected == b.collected && a.visited == b.visited && a.completed == b.completed &&
                 a.completionRevision == b.completionRevision && a.completionAuthor == b.completionAuthor &&
-                a.portalTag == b.portalTag && a.pickedTime == b.pickedTime && a.observed == b.observed && a.imported == b.imported;
+                a.portalTag == b.portalTag && a.pickedTime == b.pickedTime && a.observed == b.observed && a.imported == b.imported &&
+                Nullable.Equals(a.dungeonOrigin, b.dungeonOrigin) &&
+                SameAliases(a.dungeonAliases, b.dungeonAliases);
+        }
+        internal static bool SameAliases(string[] a, string[] b)
+        {
+            if (ReferenceEquals(a, b)) return true;
+            int count = a?.Length ?? 0;
+            if (count != (b?.Length ?? 0)) return false;
+            for (int i = 0; i < count; i++) if (a[i] != b[i]) return false;
+            return true;
         }
         internal static MarkerRecord Copy(MarkerRecord r) => new MarkerRecord {
             id = r.id, type = r.type, position = r.position, collected = r.collected, visited = r.visited,
             completed = r.completed, pickedTime = r.pickedTime, portalTag = r.portalTag, imported = r.imported,
             completionRevision = r.completionRevision, completionAuthor = r.completionAuthor,
-            observed = r.observed, creatureLevel = r.creatureLevel, creatureRelation = r.creatureRelation
+            observed = r.observed, creatureLevel = r.creatureLevel, creatureRelation = r.creatureRelation,
+            dungeonOrigin = r.dungeonOrigin, dungeonAliases = r.dungeonAliases == null ? null : (string[])r.dungeonAliases.Clone()
         };
     }
 

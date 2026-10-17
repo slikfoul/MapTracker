@@ -1,8 +1,10 @@
 param(
     [string]$Game = 'G:\Games\SteamLibrary\steamapps\common\Valheim',
-    [string]$Profile = "$env:APPDATA\Thunderstore Mod Manager\DataFolder\Valheim\profiles\Default"
+    [string]$Profile,
+    [string]$DataRoot = (Join-Path $env:APPDATA 'r2modmanPlus-local\Valheim')
 )
 $ErrorActionPreference = 'Stop'
+if (-not $PSBoundParameters.ContainsKey('Profile')) { $Profile = Join-Path $DataRoot 'profiles\Default' }
 Add-Type -LiteralPath (Join-Path $Profile 'BepInEx\core\Mono.Cecil.dll')
 $plugin = [Mono.Cecil.AssemblyDefinition]::ReadAssembly("$PSScriptRoot\bin\Release\MapTracker.dll")
 $gameAssembly = [Mono.Cecil.AssemblyDefinition]::ReadAssembly("$Game\valheim_Data\Managed\assembly_valheim.dll")
@@ -34,6 +36,15 @@ try {
         ($plugin.MainModule.Types | Where-Object Name -EQ 'PerformanceMeter')) { throw 'Removed diagnostics/shortcuts are still exposed.' }
     if ($references -contains 'Jotunn' -or $references -contains 'System.ValueTuple') { throw 'Unexpected runtime dependency.' }
     $types = @($gameAssembly.MainModule.Types) + @($guiAssembly.MainModule.Types)
+    if ($plugin.MainModule.Types | Where-Object FullName -eq 'Location') { throw 'A diagnostic copy of the native Location class was compiled into the mod.' }
+    $locationType = $gameAssembly.MainModule.Types | Where-Object Name -eq 'Location' | Select-Object -First 1
+    if (!($locationType.Methods | Where-Object { $_.Name -eq 'GetLocation' -and $_.IsPublic -and $_.IsStatic -and $_.Parameters.Count -eq 2 }) -or
+        !($locationType.Methods | Where-Object { $_.Name -eq 'GetMaxRadius' -and $_.IsPublic -and $_.Parameters.Count -eq 0 })) { throw 'Native location ownership API was not found.' }
+    $objectStyle = $plugin.MainModule.Types | Where-Object Name -eq 'ObjectIconContrast' | Select-Object -First 1
+    $objectCalls = @($objectStyle.Methods | Where-Object HasBody | ForEach-Object { $_.Body.Instructions | Where-Object { $_.Operand -is [Mono.Cecil.MethodReference] } | ForEach-Object { $_.Operand.Name } })
+    if ($entrypointStrings -notcontains 'Contrast object icons' -or $entrypointStrings -notcontains 'Object outline thickness' -or
+        $objectCalls -notcontains 'set_Thickness' -or $objectCalls -contains 'GetPixels' -or $objectCalls -contains 'ReadPixels') { throw 'Non-creature silhouette outline settings or mesh reuse are missing.' }
+    Write-Output 'PASS: native location ownership API and separate non-creature mesh outline settings verified.'
     $patches = @(
         @{ Type = 'Player'; Method = 'TakeInput'; Parameters = 0 },
         @{ Type = 'TextInput'; Method = 'IsVisible'; Parameters = 0 },

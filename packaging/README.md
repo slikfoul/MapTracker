@@ -28,6 +28,8 @@ Portals display their tags. Dungeon entrances have distinct symbols, visited sta
 
 **Left-click a dungeon marker on the large map** to toggle its completed state. Click it again to remove the mark. If it belongs to a collapsed group, reveal the group first and then click the individual entrance. **Alt + left-click** selects navigation instead of changing completion. Navigation target highlighting takes priority over these state colors. With **Share discoveries** enabled, dungeon visits and manual completion changes also update entrances already discovered by your friends. Update both clients to **1.0.4 or later** for completion marks and resets to synchronize reliably. Progress changes receive priority within the existing traffic limits; concurrent changes converge using saved logical revisions, independently of PC clocks.
 
+Different observations of the same dungeon entrance share one marker, retaining visited and completed states and favorites. Older shifted markers are reconciled when you revisit the loaded location or receive a confirmed shared discovery. Separate nearby dungeon entrances keep their own markers. Update participating clients to 1.0.5 or later for shared legacy-entrance reconciliation.
+
 ## Customize both maps
 
 The **Minimap** and **Large map** configuration sections have independent creature icon, size and name controls. Use trophy heads and custom creature icons, or relationship-colored dots:
@@ -37,9 +39,11 @@ The **Minimap** and **Large map** configuration sections have independent creatu
 - **Yellow:** neutral wildlife.
 - **Cyan:** tamed creatures.
 
-Adjust black silhouette outline thickness and set creature and other-object font sizes separately. Stars and group counts remain visible. Minimap names use a configurable distance from your character; large-map names respond to zoom and available space. Hover reveals names hidden by crowded labels.
+Adjust black silhouette outline thickness and set creature and other-object font sizes separately. Stars and group counts remain visible. Minimap names use a configurable distance from your character; large-map names respond to zoom and available space. At close zoom, portal captions take priority and normally appear above their icons without hovering. Other individual names can move above their markers when the lower position is occupied, so a portal and dungeon at the same spot can both be labeled. Names still respect visibility filters, map edges and the space available; hover reveals any remaining hidden names.
 
 New profiles use minimap dots with hidden creature names and large-map creature icons with names at close zoom. Existing settings are preserved when updating.
+
+Contrast object icons and Object outline thickness add optional black outlines to portals, dungeons, resources, plants, structures and other non-creature markers on both maps, independently of creature outline settings.
 
 ## Keep crowded maps readable
 

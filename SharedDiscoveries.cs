@@ -15,7 +15,8 @@ namespace MapTracker
         }
         internal static bool Near(MarkerRecord record, Vector3 position)
         {
-            float limit = record.entry.dungeon ? 2 : record.entry.category == "Portals" ? 0.25f : 0.1f;
+            if (record.entry.dungeon) return DungeonDiscoveries.SameEntrance(record, record.type, position, false);
+            float limit = record.entry.category == "Portals" ? 0.25f : 0.1f;
             float x = record.position.x - position.x, y = record.position.y - position.y, z = record.position.z - position.z;
             return x * x + y * y + z * z < limit * limit;
         }
@@ -44,9 +45,41 @@ namespace MapTracker
             return true;
         }
         internal static MarkerRecord Receive(IDictionary<string, MarkerRecord> records, MarkerRecord incoming, long peer, float now, SharedDiscoveryIndex index = null)
+            => ReceiveTracked(records, incoming, peer, now, index, null);
+        internal static MarkerRecord Resolve(IDictionary<string, MarkerRecord> records, MarkerRecord incoming,
+            SharedDiscoveryIndex index, Predicate<MarkerRecord> allow = null)
         {
-            MarkerRecord existing = records.TryGetValue(incoming.id, out var exact) ? exact :
-                index != null ? index.Find(incoming.type, incoming.position) : Find(records, incoming.id, incoming.type, incoming.position);
+            records.TryGetValue(incoming.id, out var exact);
+            var aliasOwner = index?.FindAlias(incoming.id);
+            if (aliasOwner != null && aliasOwner.type == incoming.type && (allow == null || allow(aliasOwner)) &&
+                (!aliasOwner.dungeonOrigin.HasValue || Vector3.Distance(aliasOwner.dungeonOrigin.Value, incoming.position) <= 100f) &&
+                (!aliasOwner.dungeonOrigin.HasValue || !incoming.dungeonOrigin.HasValue ||
+                    DungeonDiscoveries.Close(aliasOwner.dungeonOrigin.Value, incoming.dungeonOrigin.Value))) return aliasOwner;
+            if (incoming.dungeonAliases != null)
+                foreach (string id in incoming.dungeonAliases)
+                    if (!string.IsNullOrEmpty(id) && records.TryGetValue(id, out var alias) && alias.type == incoming.type && alias.entry?.dungeon == true &&
+                        incoming.dungeonOrigin.HasValue && Vector3.Distance(alias.position, incoming.dungeonOrigin.Value) <= 100f &&
+                        (allow == null || allow(alias)) && (!alias.dungeonOrigin.HasValue ||
+                        incoming.dungeonOrigin.HasValue && DungeonDiscoveries.Close(alias.dungeonOrigin.Value, incoming.dungeonOrigin.Value)))
+                        if (exact == null || exact.shared && !alias.shared) { exact = alias; }
+            // Keep an exact local observation, then prefer any local entrance over a remote alias.
+            if (exact != null && (!exact.shared || exact.dynamic)) return exact;
+            if (index != null && allow == null)
+            {
+                var indexedSite = index.FindSite(incoming.type, incoming.position, incoming.dungeonOrigin);
+                return indexedSite != null && (!indexedSite.shared || exact == null) ? indexedSite : exact;
+            }
+            var candidates = index != null ? index.Candidates(incoming.type, incoming.position, incoming.dungeonOrigin) :
+                records.Values.Where(r => !r.dynamic && r.entry != null && !r.entry.creature &&
+                    (r.type == incoming.type || r.entry.key == incoming.type) &&
+                    (r.entry.dungeon ? DungeonDiscoveries.SameEntrance(r, incoming.type, incoming.position, false, incoming.dungeonOrigin) : Near(r, incoming.position)));
+            var site = candidates.Where(r => allow == null || allow(r)).OrderBy(r => r.shared).FirstOrDefault();
+            return site != null && (!site.shared || exact == null) ? site : exact;
+        }
+        internal static MarkerRecord ReceiveTracked(IDictionary<string, MarkerRecord> records, MarkerRecord incoming,
+            long peer, float now, SharedDiscoveryIndex index, Action<MarkerRecord> removePin, Predicate<MarkerRecord> allow = null)
+        {
+            MarkerRecord existing = Resolve(records, incoming, index, allow);
             if (existing != null && (existing.dynamic || existing.entry?.creature == true ||
                 existing.type != incoming.type && existing.entry?.key != incoming.type)) return existing;
             if (existing == null)
@@ -57,7 +90,14 @@ namespace MapTracker
             }
             else if (existing.shared)
             {
-                existing.position = incoming.position; existing.portalTag = incoming.portalTag;
+                // Old-format peers may still send the proxy root. Keep a learned doorway.
+                bool rootOnly = existing.dungeonOrigin.HasValue && !incoming.dungeonOrigin.HasValue &&
+                    (existing.dungeonAliases != null && existing.dungeonAliases.Contains(incoming.id) ||
+                     DungeonDiscoveries.Close(incoming.position, existing.dungeonOrigin.Value) &&
+                     !DungeonDiscoveries.Close(existing.position, existing.dungeonOrigin.Value));
+                if (!rootOnly) existing.position = incoming.position;
+                if (incoming.dungeonOrigin.HasValue) existing.dungeonOrigin = incoming.dungeonOrigin;
+                existing.portalTag = incoming.portalTag;
                 if (existing.entry?.dungeon != true && incoming.entry?.dungeon != true)
                 { existing.completed = incoming.completed; existing.visited = incoming.visited; }
                 existing.collected = incoming.collected;
@@ -66,6 +106,16 @@ namespace MapTracker
                 if (incoming.entry != null) existing.entry = incoming.entry;
             }
             if (existing.entry?.dungeon == true || incoming.entry?.dungeon == true) DungeonProgress.Merge(existing, incoming);
+            if (existing.entry?.dungeon == true)
+            {
+                if (!existing.live && incoming.dungeonAliases != null && incoming.dungeonAliases.Contains(existing.id))
+                    existing.position = incoming.position;
+                DungeonDiscoveries.AdoptOrigin(existing, incoming);
+                DungeonDiscoveries.AdoptAliases(existing, incoming);
+                if (existing != incoming) DungeonDiscoveries.RememberAlias(existing, incoming.id);
+                index?.Add(existing);
+                if (index != null) DungeonDiscoveries.Reconcile(records, existing, index, removePin ?? (_ => { }), allow);
+            }
             Observe(existing, peer, incoming.observed, now, 40);
             return existing;
         }
@@ -83,9 +133,9 @@ namespace MapTracker
                 .OrderBy(r => r.shared).ThenByDescending(r => r.live).ThenBy(r => r.id, StringComparer.Ordinal).ToList())
             {
                 if (!MarkerLifetime.Current(records, record)) { yield return 0; continue; }
-                var canonical = index.Find(record.type, record.position);
+                var canonical = index.FindSite(record.type, record.position, record.dungeonOrigin);
                 if (canonical == null) { index.Add(record); yield return 0; continue; }
-                if (canonical.entry?.dungeon == true) DungeonProgress.Merge(canonical, record);
+                if (canonical.entry?.dungeon == true) { DungeonDiscoveries.Merge(canonical, record); index.Add(canonical); }
                 if (canonical.shared == record.shared)
                 {
                     if (canonical.entry?.dungeon != true) { canonical.visited |= record.visited; canonical.completed |= record.completed; }

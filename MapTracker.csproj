@@ -4,13 +4,13 @@
     <AssemblyName>MapTracker</AssemblyName>
     <RootNamespace>MapTracker</RootNamespace>
     <LangVersion>latest</LangVersion>
-    <Version>1.0.4</Version>
+    <Version>1.0.5</Version>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
     <CopyLocalDependenciesWhenTargetingNetFx>false</CopyLocalDependenciesWhenTargetingNetFx>
     <ValheimDir>G:\Games\SteamLibrary\steamapps\common\Valheim</ValheimDir>
     <ManagedDir>$(ValheimDir)\valheim_Data\Managed</ManagedDir>
-    <ModProfile>$(APPDATA)\Thunderstore Mod Manager\DataFolder\Valheim\profiles\Default</ModProfile>
+    <ModProfile Condition="'$(ModProfile)' == ''">$(APPDATA)\r2modmanPlus-local\Valheim\profiles\Default</ModProfile>
     <BepInExCore>$(ModProfile)\BepInEx\core</BepInExCore>
   </PropertyGroup>
   <ItemGroup>
@@ -18,6 +18,7 @@
     <EmbeddedResource Include="assets/creature-icons/*.png" LogicalName="MapTracker.CreatureIcons.%(Filename)%(Extension)" />
     <Compile Remove="tests/**/*.cs" />
     <Compile Remove="migration/**/*.cs" />
+    <Compile Remove="artifacts/**/*.cs" />
     <Reference Include="Newtonsoft.Json"><HintPath>$(ManagedDir)\Newtonsoft.Json.dll</HintPath><Private>false</Private></Reference>
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
     <Reference Include="assembly_valheim"><HintPath>$(ManagedDir)\assembly_valheim.dll</HintPath><Private>false</Private></Reference>

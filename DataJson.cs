@@ -34,9 +34,11 @@ namespace MapTracker
 
         private sealed class PositionConverter : JsonConverter
         {
-            public override bool CanConvert(Type type) { return type == typeof(Vector3); }
+            public override bool CanConvert(Type type)
+            { return type == typeof(Vector3) || Nullable.GetUnderlyingType(type) == typeof(Vector3); }
             public override void WriteJson(JsonWriter writer, object value, JsonSerializer serializer)
             {
+                if (value == null) { writer.WriteNull(); return; }
                 var point = (Vector3)value;
                 writer.WriteStartObject();
                 writer.WritePropertyName("x"); writer.WriteValue(point.x);
@@ -46,6 +48,7 @@ namespace MapTracker
             }
             public override object ReadJson(JsonReader reader, Type type, object existing, JsonSerializer serializer)
             {
+                if (reader.TokenType == JsonToken.Null) return type == typeof(Vector3) ? (object)default(Vector3) : null;
                 var point = JObject.Load(reader);
                 return new Vector3((float?)point["x"] ?? 0, (float?)point["y"] ?? 0, (float?)point["z"] ?? 0);
             }

@@ -1,20 +1,22 @@
 param(
-    [string]$Profile = "$env:APPDATA\Thunderstore Mod Manager\DataFolder\Valheim\profiles\Default",
+    [string]$Profile,
     [string]$Dll = "$PSScriptRoot\bin\Release\MapTracker.dll",
-    [switch]$IncludeMigration
+    [switch]$IncludeMigration,
+    [string]$DataRoot = (Join-Path $env:APPDATA 'r2modmanPlus-local\Valheim')
 )
 $ErrorActionPreference = 'Stop'
-if (Get-Process -Name valheim -ErrorAction SilentlyContinue) { throw 'Close Valheim before replacing the plugin DLL.' }
+if (-not $PSBoundParameters.ContainsKey('Profile')) { $Profile = Join-Path $DataRoot 'profiles\Default' }
+if (@(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -match '^(valheim|r2modman.*|Thunderstore.*)$' }).Count) { throw 'Close Valheim and r2modman (and Thunderstore Mod Manager if running) before replacing plugins.' }
 if (-not (Test-Path -LiteralPath "$Profile\BepInEx\core\BepInEx.dll")) { throw 'Profile BepInEx installation not found.' }
 $sourcePath = (Resolve-Path -LiteralPath $Dll).Path
 if (-not $IncludeMigration) {
-    $profilesRoot = [IO.Path]::GetFullPath((Join-Path $env:APPDATA 'Thunderstore Mod Manager\DataFolder\Valheim\profiles'))
+    $profilesRoot = [IO.Path]::GetFullPath((Join-Path $DataRoot 'profiles'))
     $profilePath = [IO.Path]::GetFullPath($Profile).TrimEnd([IO.Path]::DirectorySeparatorChar)
     if ([IO.Path]::GetDirectoryName($profilePath) -eq $profilesRoot -and (Test-Path -LiteralPath (Join-Path $profilePath 'mods.yml'))) {
         $releaseDll = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'bin\Release\MapTracker.dll'))
         if ($sourcePath -ne $releaseDll) { throw 'Registered installation requires the Release DLL used by BuildPackage.ps1.' }
         & (Join-Path $PSScriptRoot 'BuildPackage.ps1') -SkipBuild
-        & (Join-Path $PSScriptRoot 'RegisterLocalMod.ps1') -Profile ([IO.Path]::GetFileName($profilePath))
+        & (Join-Path $PSScriptRoot 'RegisterLocalMod.ps1') -Profile ([IO.Path]::GetFileName($profilePath)) -DataRoot $DataRoot
         return
     }
 }

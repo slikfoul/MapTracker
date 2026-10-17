@@ -176,3 +176,65 @@ for (int trial = 0; trial < 60; trial++)
     }
     Check(anchoredSelection.Choose(inputs, 3).SequenceEqual(expected), "spatial anchored selection matches independent collision checks " + trial);
 }
+
+var twoAnchors = new LabelLayout.TwoAnchorSelection();
+var labelViewport = new LabelBox(0, 0, 1000, 800);
+var noPlayer = new LabelBox(-1000, -1000, 40, 40);
+var portalAbove = new LabelBox(350, 430, 100, 24);
+var dungeonBelow = new LabelBox(320, 370, 160, 24);
+Check(twoAnchors.Choose(new[] { portalAbove, dungeonBelow }, new[] { dungeonBelow, portalAbove }, labelViewport, noPlayer, 4)
+    .SequenceEqual(new[] { 0, 0 }), "coincident portal and dungeon retain separate upper and lower captions without hover");
+Check(twoAnchors.Choose(new[] { dungeonBelow, dungeonBelow }, new[] { portalAbove, portalAbove }, labelViewport, noPlayer, 4)
+    .SequenceEqual(new[] { 0, 1 }), "an ordinary name switches above its marker when its lower caption collides");
+var bothBelow = new[] { dungeonBelow, dungeonBelow, dungeonBelow };
+var bothAbove = new[] { portalAbove, portalAbove, portalAbove };
+Check(twoAnchors.Choose(bothBelow, bothAbove, labelViewport, noPlayer, 4).SequenceEqual(new[] { 0, 1, -1 }),
+    "a full upper and lower pair never sends a third caption far away or overlaps accepted text");
+var pairPreferred = new[] { portalAbove, dungeonBelow };
+var pairAlternate = new[] { dungeonBelow, portalAbove };
+Check(Enumerable.Range(0, 10).All(_ => twoAnchors.Choose(pairPreferred, pairAlternate, labelViewport, noPlayer, 4).SequenceEqual(new[] { 0, 0 })),
+    "unchanged markers keep identical upper and lower choices across frames and pointer movement");
+Check(twoAnchors.Choose(new[] { new LabelBox(350, 790, 100, 24) }, new[] { new LabelBox(350, 740, 100, 24) }, labelViewport, noPlayer, 4)[0] == 1,
+    "a portal near the top edge falls below instead of spilling outside the map");
+Check(twoAnchors.Choose(new[] { new LabelBox(350, -10, 100, 24) }, new[] { portalAbove }, labelViewport, noPlayer, 4)[0] == 1,
+    "a lower caption outside the map may still fit above its icon");
+Check(twoAnchors.Choose(new[] { dungeonBelow }, new[] { portalAbove }, labelViewport, dungeonBelow, 4)[0] == 1,
+    "fallback captions respect the reserved player marker");
+Check(twoAnchors.Choose(new[] { new LabelBox(0, 0, 1100, 24) }, new[] { new LabelBox(0, 40, 1100, 24) }, labelViewport, noPlayer, 4)[0] == -1,
+    "oversized names remain hover-only rather than crossing map borders");
+Check(twoAnchors.Choose(pairPreferred.Select(b => new LabelBox(b.X + 50, b.Y - 20, b.Width, b.Height)).ToArray(),
+    pairAlternate.Select(b => new LabelBox(b.X + 50, b.Y - 20, b.Width, b.Height)).ToArray(), labelViewport, noPlayer, 4)
+    .SequenceEqual(new[] { 0, 0 }), "panning a portal and dungeon retains upper and lower label placement");
+var denseLower = Enumerable.Repeat(dungeonBelow, 1000).ToArray();
+var denseUpper = Enumerable.Repeat(portalAbove, 1000).ToArray();
+Check(twoAnchors.Choose(denseLower, denseUpper, labelViewport, noPlayer, 4).Count(v => v >= 0) == 2,
+    "a thousand coincident markers reserve only two caption positions");
+for (int warmup = 0; warmup < 5; warmup++) twoAnchors.Choose(denseLower, denseUpper, labelViewport, noPlayer, 4);
+long allocationStart = GC.GetAllocatedBytesForCurrentThread();
+var twoAnchorWatch = System.Diagnostics.Stopwatch.StartNew();
+for (int frame = 0; frame < 100; frame++) twoAnchors.Choose(denseLower, denseUpper, labelViewport, noPlayer, 4);
+twoAnchorWatch.Stop();
+long frameAllocations = GC.GetAllocatedBytesForCurrentThread() - allocationStart;
+Check(frameAllocations < 4096, "repeated dense caption placement reuses spatial buffers instead of allocating each frame");
+Console.WriteLine($"Two-anchor dense layout: {twoAnchorWatch.Elapsed.TotalMilliseconds / 100:0.000} ms/frame, {frameAllocations} bytes over 100 frames (synthetic, not gameplay).");
+for (int trial = 0; trial < 40; trial++)
+{
+    var primary = Enumerable.Range(0, 150).Select(_ => new LabelBox(random.Next(-40, 900), random.Next(-40, 780), random.Next(20, 200), random.Next(12, 42))).ToArray();
+    var alternate = primary.Select(b => new LabelBox(b.X, b.Y + b.Height + 30, b.Width, b.Height)).ToArray();
+    var occupied = new List<LabelBox> { new LabelBox(480, 380, 40, 40) };
+    var expected = new int[primary.Length];
+    for (int i = 0; i < primary.Length; i++)
+    {
+        expected[i] = -1;
+        for (int side = 0; side < 2; side++)
+        {
+            var candidate = side == 0 ? primary[i] : alternate[i];
+            bool overlaps = occupied.Any(b => candidate.X < b.X + b.Width + 4 && candidate.X + candidate.Width + 4 > b.X &&
+                candidate.Y < b.Y + b.Height + 4 && candidate.Y + candidate.Height + 4 > b.Y);
+            if (!LabelLayout.Inside(candidate, labelViewport) || overlaps) continue;
+            expected[i] = side; occupied.Add(candidate); break;
+        }
+    }
+    Check(twoAnchors.Choose(primary, alternate, labelViewport, occupied[0], 4).SequenceEqual(expected),
+        "two-anchor spatial choices match independent border and collision checks " + trial);
+}

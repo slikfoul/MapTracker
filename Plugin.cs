@@ -10,12 +10,14 @@ namespace MapTracker
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "Slikfoul.MapTracker";
-        public const string Version = "1.0.4";
+        public const string Version = "1.0.5";
         internal static Plugin Instance;
         internal ConfigEntry<bool> Enabled, SmallMap, LargeMap, OtherPlayerPins;
         internal ConfigEntry<bool> Hostile, Friendly, Animals, Tamed;
         internal ConfigEntry<bool> ShowPickedPlants, ShowMined, ShowCompleted;
         internal ConfigEntry<bool> HideMinimapNames, HideLargeMapNames, CreatureIcons, MinimapCreatureIcons, ContrastCreatureIcons;
+        internal ConfigEntry<bool> ContrastObjectIcons;
+        internal ConfigEntry<int> ObjectOutlineThickness;
         internal ConfigEntry<int> PresetRevision;
         internal ConfigEntry<bool> GroupMarkers, GroupCreatures, GroupPlants;
         internal ConfigEntry<bool> ShareMarkers;
@@ -64,6 +66,8 @@ namespace MapTracker
                     new ConfigurationManagerAttributes { DispName = "Creature icons on minimap" }));
             ContrastCreatureIcons = Bind("Icons", "Contrast creature icons", true, "Контрастные значки существ", "Add a solid black outline along each creature icon's transparent silhouette on both maps. No circular background, colored copies or clipping. Turn off for plain heads. Stars remain; relationship colors apply in dot mode. Applies when creature icons are enabled.");
             CreatureOutlineThickness = Config.Bind("Icons", "Creature outline thickness", 1, new ConfigDescription("Thickness of the solid black outline along the icon silhouette, in whole UI pixels, on both maps. Requires Contrast creature icons and icon mode. The head itself keeps its chosen size.", new AcceptableValueRange<int>(1, 4)));
+            ContrastObjectIcons = Config.Bind("Icons", "Contrast object icons", true, "Add a solid black silhouette outline to MapTracker's non-creature icons on both maps: portals, dungeons, resources, plants, structures and other objects. Does not change creature icons, marker positions or navigation highlight colors.");
+            ObjectOutlineThickness = Config.Bind("Icons", "Object outline thickness", 1, new ConfigDescription("Black outline thickness for non-creature MapTracker icons, in whole UI pixels, on both maps. Requires Contrast object icons.", new AcceptableValueRange<int>(1, 4)));
             MinimapCreatureIconSize = ConfigSections.Bind(Config, "Icons", "Minimap", "Minimap creature icon size", DefaultSettings.Value("Minimap", "Minimap creature icon size", 26), new ConfigDescription("Creature icon size on the minimap, in UI pixels. Applies to icon mode; colored dot sizes remain unchanged.", new AcceptableValueRange<int>(12, 48), new ConfigurationManagerAttributes { DispName = "Minimap creature icon size" }));
             LargeMapCreatureIconSize = ConfigSections.Bind(Config, "Icons", "Large map", "Large map creature icon size", DefaultSettings.Value("Large map", "Large map creature icon size", 30), new ConfigDescription("Creature icon size on the large map, in UI pixels. Applies at icon-visible zoom; distant colored dots remain unchanged.", new AcceptableValueRange<int>(12, 64), new ConfigurationManagerAttributes { DispName = "Large map creature icon size" }));
             OtherPlayerPins = Bind("Sharing", "Other player pins", true, "Показывать метки других игроков", "Show ordinary player-created pins shared through the game's cartography table. Does not control MapTracker discoveries, creature exchange, navigation destinations, live player positions or your own pins.");
@@ -107,6 +111,8 @@ namespace MapTracker
             MinimapCreatureIcons.SettingChanged += (_, __) => Tracking.RequestPinRefresh();
             ContrastCreatureIcons.SettingChanged += (_, __) => Tracking.RequestPinRefresh();
             CreatureOutlineThickness.SettingChanged += (_, __) => Tracking.RequestPinRefresh();
+            ContrastObjectIcons.SettingChanged += (_, __) => Tracking.RequestPinRefresh();
+            ObjectOutlineThickness.SettingChanged += (_, __) => Tracking.RequestPinRefresh();
             MinimapCreatureIconSize.SettingChanged += (_, __) => Tracking.RequestPinRefresh();
             LargeMapCreatureIconSize.SettingChanged += (_, __) => Tracking.RequestPinRefresh();
             GroupCreatures.SettingChanged += (_, __) => Tracking.RequestPinRefresh();

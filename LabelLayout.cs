@@ -13,6 +13,39 @@ namespace MapTracker
         internal static bool Inside(LabelBox box, LabelBox area) => box.X >= area.X && box.Y >= area.Y &&
             box.X + box.Width <= area.X + area.Width && box.Y + box.Height <= area.Y + area.Height;
 
+        // At most two nearby anchors: never scatter labels across the map.
+        internal sealed class TwoAnchorSelection
+        {
+            private LabelBox[] placed;
+            private SpatialOverlap index;
+            private int[] choices;
+            internal int[] Choose(IReadOnlyList<LabelBox> preferred, IReadOnlyList<LabelBox> alternate,
+                LabelBox viewport, LabelBox reserved, float gap)
+            {
+                if (choices == null || choices.Length != preferred.Count)
+                {
+                    choices = new int[preferred.Count]; placed = new LabelBox[preferred.Count + 1];
+                    index = new SpatialOverlap(placed, gap);
+                }
+                index.Reset(gap);
+                placed[0] = reserved; index.Add(0);
+                for (int i = 0; i < preferred.Count; i++)
+                {
+                    choices[i] = -1;
+                    LabelBox box = preferred[i];
+                    if (Inside(box, viewport) && index.Overlap(box) == 0) choices[i] = 0;
+                    else
+                    {
+                        box = alternate[i];
+                        if (Inside(box, viewport) && index.Overlap(box) == 0) choices[i] = 1;
+                    }
+                    if (choices[i] < 0) continue;
+                    placed[i + 1] = box; index.Add(i + 1);
+                }
+                return choices;
+            }
+        }
+
         internal sealed class Selection
         {
             private LabelBox[] previous;
