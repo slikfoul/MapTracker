@@ -148,7 +148,7 @@ try {
         throw 'Native socket queue API signature changed.'
     }
     Write-Output 'PASS: bounded RPC sender, deferred receive callbacks, incremental map updates and native socket queue API verified.'
-    foreach ($name in @('StylePins', 'EnforceNameVisibility', 'UpdateNearbyNames', 'OwnCreatures')) {
+    foreach ($name in @('StylePins', 'EnforceNameVisibility', 'UpdateNearbyNames', 'OwnCreatures', 'UpdateCreatureSearch', 'CanSearchCreature')) {
         $method = $tracking.Methods | Where-Object Name -EQ $name | Select-Object -First 1
         if ($method.Body.Instructions | Where-Object { $_.Operand -is [Mono.Cecil.FieldReference] -and $_.Operand.Name -eq 'records' }) {
             throw "Saved discovery archive is traversed by per-frame path $name."
@@ -232,6 +232,23 @@ try {
         throw 'Priority updates bypass the normal send scheduler.'
     }
     Write-Output 'PASS: revisioned dungeon clicks, incremental received-progress persistence/rendering and budgeted priority integration verified.'
+    $container = $gameAssembly.MainModule.Types | Where-Object Name -EQ 'Container' | Select-Object -First 1
+    if (-not ($container.Methods | Where-Object { $_.Name -eq 'UpdateUseVisual' -and $_.Parameters.Count -eq 0 -and $_.ReturnType.FullName -eq 'System.Void' })) {
+        throw 'Native chest opening visual callback changed.'
+    }
+    $chestVisit = $tracking.Methods | Where-Object Name -EQ 'CharredChestOpened' | Select-Object -First 1
+    $chestCalls = @($chestVisit.Body.Instructions | Where-Object { $_.Operand -is [Mono.Cecil.MethodReference] } | ForEach-Object { $_.Operand.DeclaringType.Name + '.' + $_.Operand.Name })
+    if ($chestCalls -notcontains 'Location.GetLocation' -or $chestCalls -notcontains 'FortressVisit.Mark' -or $chestCalls -notcontains 'Plugin.ProgressChanged') {
+        throw 'Fortress visits lack native ownership validation or ordinary progress sharing.'
+    }
+    if ($chestCalls | Where-Object { $_ -match '\.(Save|RefreshPins|Send|InvokeRoutedRPC)$' }) {
+        throw 'Chest visual callback performs a whole save/refresh or direct network send.'
+    }
+    $classify = ($plugin.MainModule.Types | Where-Object Name -EQ 'Catalog' | Select-Object -First 1).Methods | Where-Object Name -EQ 'BindSettings' | Select-Object -First 1
+    if (-not ($classify.Body.Instructions | Where-Object { $_.Operand -is [Mono.Cecil.MethodReference] -and $_.Operand.Name -eq 'ClassifyLocation' })) {
+        throw 'Fresh and cached definitions do not share fortress category normalization.'
+    }
+    Write-Output 'PASS: native chest-open callback, fortress ownership, cached classification and deferred progress/persistence verified.'
 } finally {
     $plugin.Dispose(); $gameAssembly.Dispose(); $guiAssembly.Dispose()
 }

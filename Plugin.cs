@@ -10,7 +10,7 @@ namespace MapTracker
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "Slikfoul.MapTracker";
-        public const string Version = "1.0.5";
+        public const string Version = "1.0.6";
         internal static Plugin Instance;
         internal ConfigEntry<bool> Enabled, SmallMap, LargeMap, OtherPlayerPins;
         internal ConfigEntry<bool> Hostile, Friendly, Animals, Tamed;
@@ -31,6 +31,7 @@ namespace MapTracker
         internal ConfigEntry<int> DetectionRadius;
         internal ConfigEntry<int> ScanBudget, NameMargin;
         internal ConfigEntry<bool> NotifyDungeons;
+        internal ConfigEntry<bool> ShowCreatureSearchArrow;
         internal ConfigEntry<string> NotifyTypes;
         internal ConfigEntry<KeyboardShortcut> CancelNavigationKey;
         internal ConfigEntry<KeyboardShortcut> SelectNavigationKey;
@@ -89,7 +90,8 @@ namespace MapTracker
             ScanBudget = Config.Bind("Performance", "Scan budget ms", 2, new ConfigDescription("Maximum scan work per frame in milliseconds. A single object inspection may exceed this budget.", new AcceptableValueRange<int>(1, 8)));
             NameMargin = Config.Bind("Names", "Name distance hysteresis meters", 5, new ConfigDescription("Names appear inside their distance limit and disappear this many meters beyond it, reducing flicker.", new AcceptableValueRange<int>(0, 30)));
             NotifyDungeons = Config.Bind("Notifications", "New dungeons", false, "Notify once when a new local dungeon entrance is actually detected. Previously saved entrances do not notify.");
-            NotifyTypes = Config.Bind("Notifications", "Object type keys", "", "Comma-separated catalog keys for discovery notifications. Use the Notify checkbox in the map filter window to add or remove a type.");
+            NotifyTypes = Config.Bind("Notifications", "Object type keys", "", "Comma-separated catalog keys. Static types use discovery notification cards. Creature types show a Creature found card and an independent green search arrow at the same time. Use Notify in the map filter window to select types. Creature search follows detection and creature display filters; no creature discoveries are retained.");
+            ShowCreatureSearchArrow = Config.Bind("Notifications", "Show creature search arrow", true, "Show a Creature found card together with an independent green HUD arrow for creature types selected with Notify. Choose the nearest detected creature; keep it until it disappears, dies or you arrive within 5 meters, then choose the next nearest. Reached creatures are excluded for the rest of that detection encounter, preventing repeated acquisition when stepping back. Uses existing local observations and fresh shared creatures when sharing is enabled. Respects Show object, creature relationship and detection filters. Does not set map pins, save creatures or change personal/shared navigation. Disable this setting or clear creature Notify selections to stop searching.");
             SelectNavigationKey = Config.Bind("Navigation", "Select navigation key", new KeyboardShortcut(KeyCode.Mouse0, KeyCode.LeftAlt), "Select an object, public player or temporary destination under the pointer on the large map. Default: Alt + left-click (either Alt key). Press again on the selected target to cancel, or right-click it. Mouse bindings replace that button's normal map action; keyboard bindings work while pointing at the map. Share navigation key has priority if both bindings match. Disabled while typing or using menus.");
             ShareNavigationKey = Config.Bind("Navigation", "Share navigation key", new KeyboardShortcut(KeyCode.Mouse2, KeyCode.LeftAlt), "Share the object, public player or map location under the pointer as a separate blue navigation destination. Default: Alt + middle-click (either Alt key). Requires Share discoveries; automatic creature transmission is independent. Change the mouse button, keyboard key or modifiers, or clear the binding to disable it. Mouse bindings replace that button's normal map action; keyboard bindings work while pointing at the large map. Takes priority if Select navigation key also matches. Disabled while typing or using menus.");
             CancelNavigationKey = Config.Bind("Navigation", "Cancel navigation key", new KeyboardShortcut(KeyCode.F10), "Cancel both personal and shared navigation destinations. Right-click a map target to cancel only that target. Automatic arrival stops navigation within 5 meters. Disabled while typing or using menus.");

@@ -1,6 +1,6 @@
 {
   "name": "MapTracker",
-  "version_number": "1.0.5",
+  "version_number": "1.0.6",
   "website_url": "https://github.com/slikfoul/MapTracker",
   "description": "Track creatures, portals, dungeons and resources on both maps. Customize markers, save filters, navigate to targets and share discoveries with friends.",
   "dependencies": [

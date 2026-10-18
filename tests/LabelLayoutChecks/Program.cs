@@ -2,6 +2,19 @@ using MapTracker;
 static void Check(bool condition, string name)
 { if (!condition) throw new Exception(name); System.Console.WriteLine("PASS: " + name); }
 static bool[] Choose(params LabelBox[] boxes) => LabelLayout.Choose(boxes, 3);
+foreach (float screenWidth in new[] { 360f, 640f, 800f, 1920f, 5120f })
+    for (int arrowCount = 1; arrowCount <= 3; arrowCount++)
+    {
+        var positions = Enumerable.Range(0, arrowCount).Select(i => NavigationHudLayout.Place(i, arrowCount, screenWidth)).ToArray();
+        Check(positions.All(p => p.X - p.Width / 2 >= -screenWidth / 2 + 16 && p.X + p.Width / 2 <= screenWidth / 2 - 16),
+            $"{arrowCount} independent HUD arrows fit a {screenWidth}-pixel canvas");
+        bool separated = true;
+        for (int i = 0; i < positions.Length; i++)
+            for (int j = i + 1; j < positions.Length; j++)
+                if (positions[i].Y == positions[j].Y && Math.Abs(positions[i].X - positions[j].X) < (positions[i].Width + positions[j].Width) / 2) separated = false;
+        Check(separated && positions.All(p => NavigationHudLayout.NotificationTop(arrowCount, screenWidth) >= -p.Y + 100),
+            $"{arrowCount} navigation/search arrows leave each other and discovery cards clear at {screenWidth} pixels");
+    }
 var tooltipArea = new LabelBox(0, 0, 1200, 800);
 var portalCloud = Enumerable.Range(0, 22).Select(i => new LabelBox(650 + i % 6 * 24, 300 + i / 6 * 25, 24, 24)).ToArray();
 bool NoCover(LabelBox panel, IEnumerable<LabelBox> boxes) => boxes.All(b => panel.X + panel.Width <= b.X || panel.X >= b.X + b.Width || panel.Y + panel.Height <= b.Y || panel.Y >= b.Y + b.Height);

@@ -88,9 +88,15 @@ With Share discoveries enabled, **Alt + middle-click** an object or any map loca
 
 ## Discovery notifications
 
+**Charred Fortress** appears under **Dungeons** with a fortress symbol on both maps. Its existing discoveries and per-type settings retain the same identity. **New dungeons** and its individual **Notify** option can announce a newly detected fortress; this does not start the creature-search arrow. Opening its **Charred Chest** marks that fortress as visited (blue), even without taking loot. The visit is shared through **Share discoveries**, just like other dungeon progress; no new sharing channel is added. Merely discovering or approaching the fortress does not mark it visited. Click its marker to toggle manual completion separately.
+
+Select **Notify** for creature types to show a **Creature found** card and an independent green **[Search]** HUD arrow at the same time with the creature icon, name and distance. It starts with the nearest eligible detected creature and keeps that target until it dies, disappears, is hidden by your creature filters, or you reach it within five meters. It then announces the next nearest eligible creature outside that five-meter arrival zone. A reached creature stays excluded only while it remains detected: leave the detection area or teleport away and return to begin a new encounter with that creature. Losing detection clears the arrow immediately; no last-known position or creature history is saved. **Keep discovered** remains unavailable for creatures.
+
+Creature search respects **Show object**, creature relationship and detection filters. Fresh shared creatures are eligible when **Share creature positions** is enabled. **Notifications → Show creature search arrow** controls this arrow separately from personal and shared navigation; no map pins or map arrows are added. Creature Notify choices are included in map filter presets. Personal and shared navigation and their key bindings remain independent.
+
 Enable **Notifications → New dungeons** or select **Notify** for individual static types. Newly discovered objects appear in a dark HUD card below the navigation arrows, with an icon, a gold **New discovery** heading and a bright name.
 
-Cards appear one at a time for four seconds. Opening the large map or menus pauses their display. Saved places, received discoveries, creatures, dropped items and collected resources do not trigger new local discovery notifications.
+Cards appear one at a time for four seconds. Opening the large map or menus pauses their display. Saved places, received static discoveries, dropped items and collected resources do not trigger new local discovery notifications. Creature-search encounter cards use the same queue; a creature card is canceled if its target stops being eligible.
 
 ## Installation
 

@@ -92,7 +92,7 @@ namespace MapTracker
                 name = name,
                 types = host.Catalog.Entries.ToDictionary(e => e.key, e => new FilterPresetType
                 { selected = e.Selected.Value, keep = e.KeepVisible != null && e.KeepVisible.Value,
-                    notify = !e.creature && e.category != "Dropped items" ? (bool?)host.Tracking.Discoveries.Notifies(e.key) : null })
+                    notify = e.category != "Dropped items" ? (bool?)host.Tracking.Discoveries.Notifies(e.key) : null })
             };
         }
         internal static void Apply(Plugin host, FilterPreset preset)

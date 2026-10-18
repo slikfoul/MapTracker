@@ -277,7 +277,7 @@ namespace MapTracker
                     row.Toggle.SetIsOnWithoutNotify(row.Entry.Selected);
                     row.Keep.interactable = row.Entry.CanKeep;
                     row.Keep.SetIsOnWithoutNotify(row.Entry.KeepVisible);
-                    row.Notify.interactable = row.Entry.Members.Exists(e => !e.creature && e.category != "Dropped items");
+                    row.Notify.interactable = row.Entry.Members.Exists(e => e.category != "Dropped items");
                     row.Notify.SetIsOnWithoutNotify(row.Entry.Members.Exists(e => window.Host.Tracking.Discoveries.Notifies(e.key)));
                     row.Text.text = row.Entry.Label;
                     bool focused = row.Entry.Contains(window.FocusedKey);

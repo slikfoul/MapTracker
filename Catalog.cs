@@ -189,6 +189,7 @@ namespace MapTracker
         }
         private void BindSettings(CatalogEntry entry)
         {
+            ClassifyLocation(entry);
             // Individual types live in the searchable selector, rather than thousands of manager rows.
             bool autosave = host.Config.SaveOnConfigSet;
             host.Config.SaveOnConfigSet = false;
@@ -211,6 +212,13 @@ namespace MapTracker
                 }
             }
             finally { host.Config.SaveOnConfigSet = autosave; }
+        }
+        // An open-air dungeon has no Teleport/DungeonGenerator component. Keep its
+        // native location key and settings while normalizing fresh and cached entries.
+        internal static void ClassifyLocation(CatalogEntry entry)
+        {
+            if (entry?.key == "location:CharredFortress" && entry.prefab == "CharredFortress")
+            { entry.category = "Dungeons"; entry.dungeon = true; }
         }
         internal void ApplyMinimalPreset()
         {

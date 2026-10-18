@@ -23,6 +23,18 @@ namespace MapTracker
             if (Current != null && remaining <= 0) { ids.Remove(Current.id); Current = null; }
             if (Current == null && pending.Count > 0) { Current = pending.Dequeue(); remaining = 4; }
         }
+        internal void Remove(MarkerRecord item)
+        {
+            if (item == null) return;
+            if (ReferenceEquals(Current, item)) { ids.Remove(item.id); Current = null; remaining = 0; }
+            int count = pending.Count;
+            for (int i = 0; i < count; i++)
+            {
+                var notice = pending.Dequeue();
+                if (ReferenceEquals(notice, item)) ids.Remove(notice.id);
+                else pending.Enqueue(notice);
+            }
+        }
         internal void Clear()
         { pending.Clear(); ids.Clear(); Current = null; remaining = lastTick = 0; wasVisible = false; }
     }

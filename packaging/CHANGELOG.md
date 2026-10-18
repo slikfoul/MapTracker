@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.6
+
+- Charred Fortress in the Dungeons category with a fortress map symbol and dungeon discovery notifications.
+- Shared fortress visit status when a player opens its Charred Chest, with manual completion kept separate.
+- Creature-found cards accompanied by an independent green creature-search HUD arrow for types selected with Notify.
+- Automatic nearest-target selection and switching after a target dies, disappears or is reached within five meters.
+- Creature search selections in map filter presets, alongside static discovery notifications.
+
 ## 1.0.5
 
 - Persistent portal captions at close zoom, with upper and lower label placement for crowded large-map markers.

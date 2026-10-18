@@ -13,7 +13,7 @@ namespace MapTracker
         private MarkerRecord previousTarget;
         private readonly NavigationTargetIcon targetIcon = new NavigationTargetIcon();
 
-        internal void Apply(Minimap map, MarkerRecord target, Func<MarkerRecord, string> name, bool shared = false, bool paired = false)
+        internal void Apply(Minimap map, MarkerRecord target, Func<MarkerRecord, string> name, bool shared = false, bool search = false, int slot = 0, int count = 1)
         {
             var player = Player.m_localPlayer;
             var hud = Hud.instance;
@@ -27,8 +27,11 @@ namespace MapTracker
             if (root != null && root.parent != parent) Dispose();
             if (root == null) Create(parent, map);
             if (!root.gameObject.activeSelf) root.gameObject.SetActive(true);
-            root.anchoredPosition = new Vector2(paired ? (shared ? 175 : -175) : 0, -75);
-            Color tint = shared ? new Color(0.35f, 0.85f, 1) : new Color(1, 0.85f, 0.35f);
+            var placement = NavigationHudLayout.Place(slot, count, parent.rect.width);
+            root.anchoredPosition = new Vector2(placement.X, placement.Y);
+            root.sizeDelta = new Vector2(placement.Width, 100);
+            text.rectTransform.sizeDelta = new Vector2(Mathf.Max(1, placement.Width - 50), 50);
+            Color tint = search ? new Color(0.5f, 1, 0.5f) : shared ? new Color(0.35f, 0.85f, 1) : new Color(1, 0.85f, 0.35f);
             arrow.GetComponent<NavigationArrowGraphic>().color = tint;
             text.color = tint;
 
@@ -43,7 +46,7 @@ namespace MapTracker
             previousTarget = target;
             string title = name(target);
             text.rectTransform.anchoredPosition = new Vector2(NavigationTargetIcon.HasIcon(target) ? 14 : 0, -45);
-            float titleWidth = Mathf.Min(290, text.GetPreferredValues(title).x);
+            float titleWidth = Mathf.Min(text.rectTransform.rect.width, text.GetPreferredValues(title).x);
             targetIcon.Apply(root, map, target, new Vector2(14 - titleWidth * 0.5f - 22, -55), 30);
             string caption = title + "\n" + Mathf.RoundToInt(DiscoveryQuery.Distance(target, origin)) + " m";
             if (text.text != caption) text.text = caption;

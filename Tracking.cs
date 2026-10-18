@@ -81,6 +81,7 @@ namespace MapTracker
         private SharedDiscoveryIndex discoveryIndex;
         private readonly HashSet<MarkerRecord> pinnedRecords = new HashSet<MarkerRecord>();
         private readonly HashSet<MarkerRecord> dynamicRecords = new HashSet<MarkerRecord>();
+        private readonly Func<MarkerRecord, bool> creatureSearchAvailable;
         private readonly HashSet<MarkerRecord> liveRecords = new HashSet<MarkerRecord>();
         private readonly HashSet<MarkerRecord> remoteStaticRecords = new HashSet<MarkerRecord>();
         private readonly List<MarkerRecord> expiredRemote = new List<MarkerRecord>();
@@ -132,7 +133,25 @@ namespace MapTracker
         private IEnumerator<byte> savedPreparation;
         private bool definitionsResolved;
         internal bool Ready => loaded && definitionsResolved && host.Catalog.Ready;
-        internal Tracking(Plugin plugin) { host = plugin; Discoveries = new DiscoveryTools(this, plugin); }
+        internal Tracking(Plugin plugin) { host = plugin; Discoveries = new DiscoveryTools(this, plugin); creatureSearchAvailable = CanSearchCreature; }
+        internal bool CanSearchCreature(MarkerRecord record)
+        {
+            if (!host.Enabled.Value || !Contains(record) || !record.dynamic || record.entry?.creature != true) return false;
+            var player = Player.m_localPlayer;
+            if (player == null || player.IsDead() || player.IsTeleporting() || player.InInterior()) return false;
+            if (record.shared)
+            {
+                if (!host.ShareCreatures.Value || record.expiresAt <= Time.realtimeSinceStartup) return false;
+            }
+            else
+            {
+                if (!record.live || record.character == null || record.character.IsDead()) return false;
+                record.position = record.character.transform.position;
+            }
+            return Visible(record);
+        }
+        internal void UpdateCreatureSearch(CreatureSearch search, ISet<string> types, Vector3 origin) =>
+            search.Update(dynamicRecords, types, origin, creatureSearchAvailable);
         internal void SettingsChanged() { fullPinRefresh = true; grouping.Invalidate(); creatureNameGroups.Invalidate(); }
         private int nameDiagnosticSamples;
         private float nextNameDiagnostic;
@@ -252,9 +271,9 @@ namespace MapTracker
             if (receivedPinChanges) { receivedPinChanges = false; RefreshPins(false); }
         }
 
-        private bool Observe(ZDO zdo, ZNetView view)
+        private bool Observe(ZDO zdo, ZNetView view, bool confirmedObservation = false)
         {
-            if (host.DetectionDistance > 0 && Player.m_localPlayer != null &&
+            if (!confirmedObservation && host.DetectionDistance > 0 && Player.m_localPlayer != null &&
                 Utils.DistanceXZ(view.transform.position, Player.m_localPlayer.transform.position) > host.DetectionDistance) return true;
             CatalogEntry entry;
             bool location = zdo.GetPrefab() == "LocationProxy".GetStableHashCode();
@@ -283,8 +302,8 @@ namespace MapTracker
                 if (location && teleports.Length > 0 && entrance == null) return true;
                 if (entrance != null) position = entrance.transform.position;
             }
-            bool visibleNow = false;
-            if (host.SightDetection)
+            bool visibleNow = confirmedObservation;
+            if (host.SightDetection && !confirmedObservation)
             {
                 if (!sight.Check(view, position, Player.m_localPlayer, out visibleNow)) return false;
                 if (!visibleNow && !records.ContainsKey(id)) return true;
@@ -940,6 +959,32 @@ namespace MapTracker
         {
             pendingEntrance = entrance; pendingDeadline = Time.realtimeSinceStartup + 20;
         }
+        internal void CharredChestOpened(Container chest)
+        {
+            if (!host.Enabled.Value || !Ready || chest == null) return;
+            var chestData = chest.GetComponent<ZNetView>()?.GetZDO();
+            if (chestData == null || chestData.GetPrefab() != FortressVisit.Chest.GetStableHashCode() || chestData.GetInt(ZDOVars.s_inUse) != 1) return;
+            // Native location ownership binds the chest to its own fortress, rather
+            // than choosing the nearest remembered marker or a similarly named ruin.
+            var nativeLocation = Location.GetLocation(chest.transform.position);
+            var locationView = nativeLocation != null ? nativeLocation.GetComponentInParent<ZNetView>() : null;
+            var locationData = locationView != null ? locationView.GetZDO() : null;
+            if (locationData == null || locationData.GetPrefab() != "LocationProxy".GetStableHashCode() ||
+                locationData.GetInt(ZDOVars.s_location) != "CharredFortress".GetStableHashCode()) return;
+            string id = locationData.m_uid.ToString();
+            if (!records.TryGetValue(id, out var fortress) || fortress.type != FortressVisit.Type)
+            {
+                // Opening the chest is positive detection even when the proxy's
+                // centre is outside a tiny radius or occluded by its own walls.
+                Observe(locationData, locationView, confirmedObservation: true);
+                if (!records.TryGetValue(id, out fortress) || fortress.type != FortressVisit.Type) return;
+            }
+            if (!FortressVisit.Mark(fortress, true)) return;
+            host.ProgressChanged(fortress);
+            dirty = true; pinChanges.Add(fortress); receivedPinChanges = true;
+            // Pin updates and persistence remain in the ordinary budgeted update,
+            // never a whole-database save inside the chest's native callback.
+        }
         private void MarkVisited(Teleport entrance)
         {
             MarkerRecord closest = records.Values.Where(r => r.entry?.dungeon == true)
@@ -1112,6 +1157,16 @@ namespace MapTracker
         private static void Postfix(Teleport __instance, bool __result, bool __state)
         {
             if (__result && __state) Plugin.Instance?.Tracking?.Enter(__instance);
+        }
+    }
+    [HarmonyPatch(typeof(Container), "UpdateUseVisual")]
+    internal static class CharredChestVisitPatch
+    {
+        private static void Postfix(Container __instance)
+        {
+            var host = Plugin.Instance;
+            try { host?.Tracking?.CharredChestOpened(__instance); }
+            catch (Exception e) { host?.Report("Charred chest visit tracking failed", e); }
         }
     }
 }

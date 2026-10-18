@@ -35,6 +35,9 @@ namespace MapTracker
         private readonly NavigationHud navigationHud = new NavigationHud();
         private readonly NavigationOverlay sharedNavigation = new NavigationOverlay();
         private readonly NavigationHud sharedNavigationHud = new NavigationHud();
+        private readonly NavigationHud creatureSearchHud = new NavigationHud();
+        private readonly CreatureSearch creatureSearch = new CreatureSearch();
+        private float nextCreatureSearch;
         private readonly NavigationTargets targets = new NavigationTargets();
         private MarkerRecord target { get => targets.Personal; set => targets.Personal = value; }
         private MarkerRecord sharedTarget => targets.Shared;
@@ -154,7 +157,7 @@ namespace MapTracker
         {
             ReadNotificationTypes();
             foreach (var entry in entries)
-                if (!entry.creature && entry.category != "Dropped items")
+                if (entry.category != "Dropped items")
                 { if (enabled) notifyTypes.Add(entry.key); else notifyTypes.Remove(entry.key); }
             host.NotifyTypes.Value = string.Join(",", notifyTypes.OrderBy(t => t));
         }
@@ -167,6 +170,7 @@ namespace MapTracker
         internal void Tick()
         {
             var player = Player.m_localPlayer;
+            UpdateCreatureSearch(player);
             if (sharedTarget != null)
             {
                 var resolved = sharedObject != null && tracking.Contains(sharedObject) ? sharedObject :
@@ -190,8 +194,31 @@ namespace MapTracker
                 player.transform.position, sharedTarget.position, player.InInterior(), player.IsTeleporting(), sharedTarget.entry.category == "Navigation")))) ClearSharedTarget();
             bool showNotice = DiscoveryNotificationHud.CanShow(Minimap.instance, host.Enabled.Value && !host.Window.Open);
             notifications.Tick(Time.realtimeSinceStartup, showNotice);
-            notificationHud.Apply(Minimap.instance, notifications.Current, showNotice);
+            if (showNotice) creatureSearch.NoticeShown(notifications.Current);
+            float hudWidth = (Hud.instance?.m_rootObject?.transform as RectTransform)?.rect.width ?? 1000;
+            notificationHud.Apply(Minimap.instance, notifications.Current, showNotice, NavigationHudLayout.NotificationTop(ArrowCount(), hudWidth));
         }
+        private void UpdateCreatureSearch(Player player)
+        {
+            ReadNotificationTypes();
+            if (!host.Enabled.Value || !host.ShowCreatureSearchArrow.Value || player == null)
+            { notifications.Remove(creatureSearch.Notice); creatureSearch.Reset(); nextCreatureSearch = 0; return; }
+            float now = Time.realtimeSinceStartup;
+            // Check a current target immediately; scan only the small active-creature set,
+            // at most five times a second, rather than the saved discovery database.
+            if (now < nextCreatureSearch && (creatureSearch.Target == null ||
+                tracking.CanSearchCreature(creatureSearch.Target) && CreatureSearch.Selected(creatureSearch.Target, notifyTypes, player.transform.position))) return;
+            var oldNotice = creatureSearch.Notice;
+            tracking.UpdateCreatureSearch(creatureSearch, notifyTypes, player.transform.position);
+            if (oldNotice != creatureSearch.Notice) notifications.Remove(oldNotice);
+            var notice = creatureSearch.PrepareNotice(tracking.Name);
+            if (notice != null) notifications.Enqueue(notice);
+            nextCreatureSearch = now + 0.2f;
+        }
+        private int ArrowCount() => (host.ShowNavigationArrow.Value && target != null ? 1 : 0) +
+            (host.ShowNavigationArrow.Value && host.ShareMarkers.Value && sharedTarget != null ? 1 : 0) +
+            (host.ShowCreatureSearchArrow.Value && creatureSearch.Ready && creatureSearch.Target != null ? 1 : 0);
+        private string SearchName(MarkerRecord record) => "[Search] " + tracking.Name(record);
         internal void DrawNavigation(Minimap map)
         {
             EnsureSharedWaypoint(map);
@@ -211,8 +238,13 @@ namespace MapTracker
             bool sharedVisible = host.Enabled.Value && host.ShareMarkers.Value && !host.Window.Open;
             sharedNavigation.Apply(map, sharedVisible ? sharedTarget : null, tracking.Name, shared: true, paired: target != null);
             bool arrows = host.Enabled.Value && host.ShowNavigationArrow.Value && !host.Window.Open;
-            navigationHud.Apply(Minimap.instance, arrows ? target : null, tracking.Name, paired: sharedTarget != null && sharedVisible);
-            sharedNavigationHud.Apply(Minimap.instance, arrows && sharedVisible ? sharedTarget : null, tracking.Name, shared: true, paired: target != null);
+            bool searchArrow = host.Enabled.Value && host.ShowCreatureSearchArrow.Value && !host.Window.Open;
+            int count = ArrowCount(), slot = 0;
+            navigationHud.Apply(Minimap.instance, arrows ? target : null, tracking.Name, slot: slot, count: count);
+            if (arrows && target != null) slot++;
+            sharedNavigationHud.Apply(Minimap.instance, arrows && sharedVisible ? sharedTarget : null, tracking.Name, shared: true, slot: slot, count: count);
+            if (arrows && sharedVisible && sharedTarget != null) slot++;
+            creatureSearchHud.Apply(Minimap.instance, searchArrow && creatureSearch.Ready ? creatureSearch.Target : null, SearchName, search: true, slot: slot, count: count);
         }
         internal void Locate(MarkerRecord record)
         {
@@ -223,6 +255,6 @@ namespace MapTracker
             HarmonyLib.AccessTools.Method(typeof(Minimap), "CenterMap").Invoke(map, new object[] { record.position });
             tracking.RequestPinRefresh();
         }
-        internal void Reset() { RemoveWaypoint(); RemoveSharedWaypoint(); targets.ClearShared(); sharedObject = null; sharedObjectId = sharedObjectType = null; target = null; pointTarget = playerTarget = false; playerTargetId = default; publicPlayers.Clear(); notifications.Clear(); notificationHud.Dispose(); navigation.Dispose(); navigationHud.Dispose(); sharedNavigation.Dispose(); sharedNavigationHud.Dispose(); }
+        internal void Reset() { RemoveWaypoint(); RemoveSharedWaypoint(); targets.ClearShared(); sharedObject = null; sharedObjectId = sharedObjectType = null; target = null; creatureSearch.Reset(); nextCreatureSearch = 0; pointTarget = playerTarget = false; playerTargetId = default; publicPlayers.Clear(); notifications.Clear(); notificationHud.Dispose(); navigation.Dispose(); navigationHud.Dispose(); sharedNavigation.Dispose(); sharedNavigationHud.Dispose(); creatureSearchHud.Dispose(); }
     }
 }

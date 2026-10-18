@@ -18,7 +18,7 @@ namespace MapTracker
                 map.m_mode != Minimap.MapMode.Large && !Menu.IsVisible() && !InventoryGui.IsVisible() &&
                 !global::Console.IsVisible() && !TextInput.IsVisible() && !player.IsDead() && !player.IsTeleporting() && !player.InCutscene();
         }
-        internal void Apply(Minimap map, MarkerRecord item, bool visible)
+        internal void Apply(Minimap map, MarkerRecord item, bool visible, float top = 195)
         {
             if (!visible || item == null)
             { if (root != null) root.gameObject.SetActive(false); return; }
@@ -26,6 +26,7 @@ namespace MapTracker
             if (parent == null) return;
             if (root != null && root.parent != parent) Dispose();
             if (root == null) Create(parent, map);
+            root.anchoredPosition = new Vector2(0, -top);
             if (!root.gameObject.activeSelf) root.gameObject.SetActive(true);
             root.SetAsLastSibling();
             float width = Mathf.Min(420, Mathf.Max(220, parent.rect.width - 32));
@@ -35,7 +36,7 @@ namespace MapTracker
                 title.rectTransform.sizeDelta = new Vector2(width - 96, 24);
                 caption.rectTransform.sizeDelta = new Vector2(width - 96, 42);
             }
-            if (previous != item) { previous = item; caption.text = item.nameCache ?? ""; }
+            if (previous != item) { previous = item; caption.text = item.nameCache ?? ""; title.text = item.entry?.creature == true ? "Creature found" : "New discovery"; }
             icon.Apply(root, map, item, new Vector2(-width * 0.5f + 40, -44), 44);
         }
         private void Create(RectTransform parent, Minimap map)

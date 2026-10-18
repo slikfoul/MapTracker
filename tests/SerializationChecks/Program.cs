@@ -294,6 +294,59 @@ Check(dungeonChoices.Count == 3 && DungeonName("MountainCave02") == "Frost Caves
     "generic Cave entrance text does not merge different dungeon types; mine layout variants share one filter");
 Check(DungeonName("ModdedDungeon") == null && DungeonName("Hildir_cave") != DungeonName("MountainCave02"),
     "unknown dungeons retain their game definition; Hildir caves remain distinct from Frost Caves");
+var classifyLocation = typeof(MarkerFile).Assembly.GetType("MapTracker.Catalog").GetMethod("ClassifyLocation", lifetimeFlags);
+var charredFortress = new CatalogEntry { key = "location:CharredFortress", prefab = "CharredFortress", name = "$charredfortress", source = "ZoneSystem", category = "Locations" };
+classifyLocation.Invoke(null, new object[] { charredFortress });
+Check(charredFortress.dungeon && charredFortress.category == "Dungeons" && charredFortress.key == "location:CharredFortress" &&
+    charredFortress.name == "$charredfortress" && DungeonName(charredFortress.prefab) == "Charred Fortress",
+    "the open-air Charred Fortress is a named dungeon while its native location identity stays unchanged");
+var cachedFortress = DataJson.Read<CatalogEntry>("{\"key\":\"location:CharredFortress\",\"prefab\":\"CharredFortress\",\"category\":\"Locations\",\"dungeon\":false}");
+classifyLocation.Invoke(null, new object[] { cachedFortress });
+classifyLocation.Invoke(null, new object[] { cachedFortress });
+Check(cachedFortress.dungeon && cachedFortress.category == "Dungeons" && cachedFortress.key == charredFortress.key,
+    "legacy cached fortress definitions migrate idempotently without inventing a second catalog key");
+var normalRuin = new CatalogEntry { key = "location:CharredRuins1", prefab = "CharredRuins1", category = "Locations" };
+var fortressPart = new CatalogEntry { key = "prefab:Ashlands_Fortress_Gate", prefab = "Ashlands_Fortress_Gate", category = "Other" };
+classifyLocation.Invoke(null, new object[] { normalRuin }); classifyLocation.Invoke(null, new object[] { fortressPart });
+Check(!normalRuin.dungeon && normalRuin.category == "Locations" && !fortressPart.dungeon && fortressPart.category == "Other",
+    "fortress classification does not turn Ashlands ruins or individual wall and gate parts into extra dungeons");
+int fortressKind = (int)typeof(MarkerFile).Assembly.GetType("MapTracker.DungeonIcon").GetMethod("Kind", lifetimeFlags).Invoke(null, new object[] { "CharredFortress" });
+Check(fortressKind == 3, "the fortress uses the existing battlement-and-gate silhouette on maps, filter rows and navigation icons");
+var fortressRecord = new MarkerRecord { id = "fortress:1", type = charredFortress.key, visited = true, completed = true, favorite = true };
+recordEntry.SetValue(fortressRecord, charredFortress);
+bool fortressNotifies = (bool)typeof(MarkerFile).Assembly.GetType("MapTracker.DiscoveryNotification").GetMethod("Allowed", lifetimeFlags)
+    .Invoke(null, new object[] { fortressRecord, true, false });
+bool fortressSearch = (bool)typeof(MarkerFile).Assembly.GetType("MapTracker.CreatureSearch").GetMethod("Selected", lifetimeFlags)
+    .Invoke(null, new object[] { fortressRecord, new HashSet<string> { charredFortress.key }, new Vector3(100, 0, 100) });
+Check(fortressNotifies && !fortressSearch, "New dungeons can announce Charred Fortress without turning on an automatic creature-search arrow");
+var savedFortress = DataJson.Read<MarkerRecord>(DataJson.Write(fortressRecord));
+Check(savedFortress.id == fortressRecord.id && savedFortress.type == charredFortress.key && savedFortress.visited && savedFortress.completed && savedFortress.favorite,
+    "moving a fortress into Dungeons retains its saved identity, visit, completion and favorite states");
+var markFortressVisit = typeof(MarkerFile).Assembly.GetType("MapTracker.FortressVisit").GetMethod("Mark", lifetimeFlags);
+var unopenedFortress = new MarkerRecord { id = "fortress:2", type = charredFortress.key, favorite = true, completionRevision = 8, completionAuthor = 42 };
+recordEntry.SetValue(unopenedFortress, charredFortress);
+bool OpenFortress(MarkerRecord r, bool opened) => (bool)markFortressVisit.Invoke(null, new object[] { r, opened });
+Check(!OpenFortress(unopenedFortress, false) && !unopenedFortress.visited,
+    "discovering a fortress or a closed Charred Chest does not invent a visit");
+unopenedFortress.shared = true; unopenedFortress.sourcePeer = 42;
+Check(OpenFortress(unopenedFortress, true) && unopenedFortress.visited && !unopenedFortress.shared && unopenedFortress.sourcePeer == 0 &&
+    !unopenedFortress.completed && unopenedFortress.favorite && unopenedFortress.completionRevision == 8 && unopenedFortress.completionAuthor == 42,
+    "opening the fortress chest creates a local visited state while manual completion, revision and favorites stay intact");
+Check(!OpenFortress(unopenedFortress, true), "repeated chest visual updates cannot repeatedly queue progress or save the fortress");
+var unrelatedDungeon = new MarkerRecord { type = "location:FortressRuins" };
+recordEntry.SetValue(unrelatedDungeon, new CatalogEntry { dungeon = true });
+Check(!OpenFortress(unrelatedDungeon, true) && !unrelatedDungeon.visited,
+    "a similarly named ruin is never marked visited by the Charred Fortress rule");
+var completedFortress = new MarkerRecord { type = charredFortress.key, completed = true, completionRevision = 15, completionAuthor = 7 };
+recordEntry.SetValue(completedFortress, charredFortress);
+Check(OpenFortress(completedFortress, true) && completedFortress.completed && completedFortress.completionRevision == 15,
+    "opening a completed fortress does not undo its manual completion");
+var peerFortress = new MarkerRecord { id = "peer:fortress", type = charredFortress.key };
+recordEntry.SetValue(peerFortress, charredFortress);
+bool peerVisitMerged = (bool)typeof(MarkerFile).Assembly.GetType("MapTracker.DungeonProgress").GetMethod("Merge", lifetimeFlags)
+    .Invoke(null, new object[] { peerFortress, unopenedFortress });
+Check(peerVisitMerged && peerFortress.visited && !peerFortress.completed,
+    "the existing dungeon progress merger propagates fortress visits to an already discovered allied marker without auto-completion");
 var visibilityType = typeof(MarkerFile).Assembly.GetType("MapTracker.DiscoveryVisibility");
 var visibilityMethod = visibilityType.GetMethod("Show", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
 var keepDefaultMethod = visibilityType.GetMethod("KeepByDefault", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
@@ -617,6 +670,79 @@ notificationSample.imported = false; notificationSample.collected = true;
 Check(!Notify(true, true), "already collected resources do not generate discovery notifications");
 notificationSample.collected = false; recordDynamic.SetValue(notificationSample, true);
 Check(!Notify(true, true), "temporary dynamic positions do not produce repeated static discovery notifications");
+recordDynamic.SetValue(notificationSample, false);
+recordEntry.SetValue(notificationSample, new CatalogEntry { creature = true, category = "Creatures" });
+Check(!Notify(true, true), "creatures use the separate search encounter card rather than static discovery notifications");
+
+var searchType = typeof(MarkerFile).Assembly.GetType("MapTracker.CreatureSearch");
+var searchSession = Activator.CreateInstance(searchType, true);
+var searchUpdate = searchType.GetMethod("Update", recordFlags);
+var searchTarget = searchType.GetProperty("Target", recordFlags);
+var searchReady = searchType.GetProperty("Ready", recordFlags);
+var searchNotice = searchType.GetMethod("PrepareNotice", recordFlags);
+var showSearchNotice = searchType.GetMethod("NoticeShown", recordFlags);
+var searchTypes = new HashSet<string> { "prefab:SeekerBrute" };
+MarkerRecord SearchCreature(string id, string type, float x)
+{
+    var r = new MarkerRecord { id = id, type = type, position = new Vector3(x, 0, 0) };
+    recordEntry.SetValue(r, new CatalogEntry { key = type, name = type, creature = true, category = "Creatures" });
+    return r;
+}
+var searchA = SearchCreature("hunt:1", "prefab:SeekerBrute", 10);
+var searchB = SearchCreature("hunt:2", "prefab:SeekerBrute", 20);
+var searchC = SearchCreature("hunt:3", "prefab:Seeker", 6);
+var searchCandidates = new[] { searchB, searchC, searchA };
+var availableSearch = new HashSet<MarkerRecord>(searchCandidates);
+Func<MarkerRecord, bool> searchAvailable = r => availableSearch.Contains(r);
+void AdvanceSearch() => searchUpdate.Invoke(searchSession, new object[] { searchCandidates, searchTypes, new Vector3(0, 0, 0), searchAvailable });
+MarkerRecord Hunting() => (MarkerRecord)searchTarget.GetValue(searchSession);
+bool SearchArrowReady() => (bool)searchReady.GetValue(searchSession);
+MarkerRecord PrepareSearchNotice() => (MarkerRecord)searchNotice.Invoke(searchSession, new object[] { (Func<MarkerRecord, string>)(r => "Creature " + r.id) });
+AdvanceSearch();
+Check(Hunting() == searchA && !SearchArrowReady(), "creature search starts at the nearest selected type without modifying personal or shared navigation");
+var noticeA = PrepareSearchNotice();
+Check(noticeA != searchA && noticeA.id == searchA.id && (string)typeof(MarkerRecord).GetField("nameCache", recordFlags).GetValue(noticeA) == "Creature " + searchA.id && !SearchArrowReady(),
+    "nearest creature prepares a detached card without prematurely enabling its HUD arrow");
+showSearchNotice.Invoke(searchSession, new object[] { new MarkerRecord { id = noticeA.id } });
+Check(!SearchArrowReady(), "an unrelated or obsolete notification cannot prematurely enable the creature arrow");
+showSearchNotice.Invoke(searchSession, new object[] { noticeA });
+Check(SearchArrowReady(), "the creature arrow starts when its own card is shown");
+searchC.type = "prefab:SeekerBrute";
+AdvanceSearch();
+Check(Hunting() == searchA && SearchArrowReady(), "a nearer new creature does not steal an active target");
+availableSearch.Remove(searchA); AdvanceSearch();
+Check(Hunting() == searchC && !SearchArrowReady(), "death or loss of detection drops the target and chooses the next nearest selected creature");
+showSearchNotice.Invoke(searchSession, new object[] { noticeA });
+Check(!SearchArrowReady(), "a late card display from a removed target cannot enable its replacement arrow");
+var noticeC = PrepareSearchNotice();
+showSearchNotice.Invoke(searchSession, new object[] { noticeC });
+searchC.position = new Vector3(5, 0, 0); AdvanceSearch();
+Check(Hunting() == searchB && !SearchArrowReady(), "arrival at exactly five meters retires that encounter and announces the next nearest creature");
+searchC.position = new Vector3(6, 0, 0);
+availableSearch.Remove(searchB); AdvanceSearch();
+Check(Hunting() == null, "stepping back beyond five meters does not reacquire the reached creature during the same encounter");
+searchC.position = new Vector3(50, 0, 0); AdvanceSearch();
+Check(Hunting() == null, "a reached creature stays suppressed while it remains detectable, without a session-wide history");
+availableSearch.Remove(searchC); AdvanceSearch();
+availableSearch.Add(searchC); searchC.position = new Vector3(10, 0, 0); AdvanceSearch();
+Check(Hunting() == searchC && !SearchArrowReady(), "leaving the detection zone and returning starts a new card and arrow for the same creature");
+availableSearch.Clear(); AdvanceSearch();
+Check(Hunting() == null, "teleporting or losing all detection clears the arrow instead of keeping a last-known location");
+availableSearch.Add(searchC); AdvanceSearch();
+Check(Hunting() == searchC && !SearchArrowReady(), "returning through a portal can announce the same creature again");
+searchTypes.Clear(); AdvanceSearch();
+Check(Hunting() == null && PrepareSearchNotice() == null, "clearing creature Notify types immediately ends the transient search");
+searchTypes.Add("prefab:SeekerBrute");
+searchC.position = new Vector3(float.NaN, 0, 0); AdvanceSearch();
+Check(Hunting() == null, "invalid target coordinates cannot create a broken HUD arrow");
+searchC.position = new Vector3(10, 0, 0); AdvanceSearch();
+searchType.GetMethod("Reset", recordFlags).Invoke(searchSession, null);
+Check(Hunting() == null && !SearchArrowReady() && PrepareSearchNotice() == null, "world reset releases the search target, pending card and reached-encounter set");
+
+var choiceType = typeof(MarkerFile).Assembly.GetType("MapTracker.FilterChoice");
+var creatureChoice = Activator.CreateInstance(choiceType, true);
+choiceType.GetField("Members", recordFlags).SetValue(creatureChoice, new List<CatalogEntry> { new() { creature = true, category = "Creatures" } });
+Check(!(bool)choiceType.GetProperty("CanKeep", recordFlags).GetValue(creatureChoice), "Keep discovered remains unavailable for creatures while Notify supports temporary search");
 var feedType = typeof(MarkerFile).Assembly.GetType("MapTracker.DiscoveryNotificationFeed");
 var feed = Activator.CreateInstance(feedType, true);
 var feedEnqueue = feedType.GetMethod("Enqueue", recordFlags);
@@ -643,6 +769,27 @@ for (int i = 0; i < 64; i++) EnqueueNotice(new MarkerRecord { id = "bounded-noti
 Check(!EnqueueNotice(new MarkerRecord { id = "overflow-notice" }), "discovery bursts have a bounded notification backlog");
 feedType.GetMethod("Clear", recordFlags).Invoke(feed, null); AdvanceNotices(108, true);
 Check(ActiveNotice() == null && EnqueueNotice(firstNotice), "world reset clears active notices, pending discoveries and duplicate suppression");
+var removeNotice = feedType.GetMethod("Remove", recordFlags);
+feedType.GetMethod("Clear", recordFlags).Invoke(feed, null);
+EnqueueNotice(firstNotice); EnqueueNotice(secondNotice);
+removeNotice.Invoke(feed, new object[] { firstNotice }); AdvanceNotices(120, true);
+Check(ActiveNotice() == secondNotice, "canceling an undisplayed creature notice leaves the remaining discovery queue intact");
+removeNotice.Invoke(feed, new object[] { secondNotice });
+Check(ActiveNotice() == null && EnqueueNotice(secondNotice), "canceling an active search card releases its queue identity for a future encounter");
+AdvanceNotices(121, true); AdvanceNotices(126, true);
+feedType.GetMethod("Clear", recordFlags).Invoke(feed, null);
+AdvanceSearch();
+var immediateSearchNotice = PrepareSearchNotice();
+EnqueueNotice(firstNotice); EnqueueNotice(immediateSearchNotice);
+AdvanceNotices(130, true);
+showSearchNotice.Invoke(searchSession, new object[] { ActiveNotice() });
+Check(!SearchArrowReady(), "a creature card waiting behind a static discovery cannot start its arrow prematurely");
+AdvanceNotices(134.1f, true);
+showSearchNotice.Invoke(searchSession, new object[] { ActiveNotice() });
+Check(ReferenceEquals(ActiveNotice(), immediateSearchNotice) && SearchArrowReady(),
+    "the creature arrow starts in the same frame its own card first becomes visible");
+AdvanceNotices(138.2f, true);
+Check(ActiveNotice() == null && SearchArrowReady(), "the arrow remains active after its discovery card expires");
 var targetGesture = typeof(MarkerFile).Assembly.GetType("MapTracker.MapTargetGesture").GetMethod("Resolve", lifetimeFlags);
 var navigationButton = typeof(MarkerFile).Assembly.GetType("MapTracker.MapTargetGesture").GetMethod("Matches", lifetimeFlags);
 bool ButtonMatches(BepInEx.Configuration.KeyboardShortcut shortcut, KeyCode button, params KeyCode[] held) =>

@@ -17,6 +17,7 @@ namespace MapTracker
                 case "Hildir_cave": return russian ? "Воющая пещера" : "Howling Cavern";
                 case "Hildir_crypt": return russian ? "Тлеющая гробница" : "Smouldering Tomb";
                 case "Hildir_plainsfortress": return russian ? "Запечатанная башня" : "Sealed Tower";
+                case "CharredFortress": return russian ? "Обугленная крепость" : "Charred Fortress";
                 default: return null;
             }
         }
