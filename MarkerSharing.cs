@@ -16,6 +16,7 @@ namespace MapTracker
         private readonly Plugin host;
         private ZRoutedRpc rpc;
         private string world;
+        private long worldUid;
         private bool active;
         private readonly Dictionary<long, SharingPeer> peers = new Dictionary<long, SharingPeer>();
         private readonly List<long> order = new List<long>();
@@ -26,8 +27,11 @@ namespace MapTracker
         private int cursor;
         private float nextHello, nextSend, nextSnapshot, nextCreatureSnapshot, nextTargetSend;
         private string advertised;
+        private bool advertisedMarkers, advertisedCreatures;
         private string session = Guid.NewGuid().ToString("N");
-        private List<MarkerRecord> discoveries = new List<MarkerRecord>(), creatures = new List<MarkerRecord>();
+        private static readonly MarkerRecord[] EmptyDiscoveries = new MarkerRecord[0];
+        private IReadOnlyList<MarkerRecord> discoveries = EmptyDiscoveries;
+        private List<MarkerRecord> creatures = new List<MarkerRecord>();
         private readonly HashSet<string> currentCreatures = new HashSet<string>();
         private static SharingBudget NewBudget() => new SharingBudget(8192, SharingBudget.PacketBytes + SharingBudget.EnvelopeBytes);
         internal MarkerSharing(Plugin plugin) { host = plugin; }
@@ -38,22 +42,26 @@ namespace MapTracker
         {
             if (!Interested) { if (active) Reset(); return; }
             if (Player.m_localPlayer == null || ZNet.instance == null || ZRoutedRpc.instance == null) { if (active) Reset(); return; }
-            string current = ZNet.instance.GetWorldUID().ToString();
+            long current = ZNet.instance.GetWorldUID();
             if (rpc != ZRoutedRpc.instance)
             {
                 Reset(); rpc = ZRoutedRpc.instance;
                 rpc.Register<string>(Hello, ReceiveHello); rpc.Register<string>(Ack, ReceiveAck);
                 rpc.Register<string>(Data, ReceiveData); rpc.Register<string>(Processed, ReceiveProcessed);
             }
-            if (world != current) { Reset(); world = current; }
+            if (world == null || worldUid != current) { Reset(); worldUid = current; world = current.ToString(); }
             if (!host.Catalog.Ready || !host.Tracking.Ready) return;
             active = true;
             float now = Time.realtimeSinceStartup;
-            if (advertised != Announcement) { advertised = Announcement; nextHello = now; }
+            if (advertised == null || advertisedMarkers != host.ShareMarkers.Value || advertisedCreatures != host.ShareCreatures.Value)
+            {
+                advertisedMarkers = host.ShareMarkers.Value; advertisedCreatures = host.ShareCreatures.Value;
+                advertised = Announcement; nextHello = now;
+            }
             ProcessIncoming(now);
             if (now >= nextSnapshot)
             {
-                discoveries = host.ShareMarkers.Value ? host.Tracking.OwnDiscoveries() : new List<MarkerRecord>();
+                discoveries = host.ShareMarkers.Value ? host.Tracking.OwnDiscoveries() : EmptyDiscoveries;
                 nextSnapshot = now + 2;
             }
             if (!host.ShareCreatures.Value) { creatures.Clear(); foreach (var peer in peers.Values) peer.Creatures.Reset(); }
@@ -102,8 +110,9 @@ namespace MapTracker
                         return;
                     }
                 }
-                var packet = new SharingPacket { world = world, session = session, sequence = peer.NextSequence };
-                if (peer.Target != null && peer.AcceptsTargets) { packet.kind = "target"; packet.target = peer.Target; }
+                SharingPacket packet;
+                if (peer.Target != null && peer.AcceptsTargets)
+                    packet = new SharingPacket { world = world, session = session, sequence = peer.NextSequence, kind = "target", target = peer.Target };
                 else
                 {
                     bool sendStatic = host.ShareMarkers.Value && peer.AcceptsDiscoveries;
@@ -111,9 +120,10 @@ namespace MapTracker
                     if (!sendStatic && !sendLive) continue;
                     bool live = sendLive && (!sendStatic || peer.NextCreatures);
                     peer.NextCreatures = !peer.NextCreatures;
-                    packet.markers = (live ? peer.Creatures : peer.Static).Select(live ? creatures : discoveries, now, live);
-                    if (packet.markers.Count == 0) continue;
-                    packet.kind = live ? "creatures" : "discoveries";
+                    var selected = (live ? peer.Creatures : peer.Static).Select(live ? creatures : discoveries, now, live);
+                    if (selected.Count == 0) continue;
+                    packet = new SharingPacket { world = world, session = session, sequence = peer.NextSequence,
+                        markers = selected, kind = live ? "creatures" : "discoveries" };
                     if (live) packet.creatureLeaseSeconds = CreatureSharingLease.Seconds(creatures.Count, peers.Count);
                 }
                 string json = DataJson.WriteNetwork(packet);
@@ -160,6 +170,8 @@ namespace MapTracker
                 if (peers.Count >= 32) return;
                 peers.Add(sender, peer = new SharingPeer()); order.Add(sender);
                 peer.Static.Current = host.Tracking.Contains;
+                peer.Static.Retained = host.Tracking.ContainsDiscovery;
+                peer.Static.Prepare = host.Tracking.PrepareSharedDiscovery;
             }
             peer.Session = remoteSession;
             bool receivesStatic = announcement[announcement.Length - 3] == '1';
@@ -185,6 +197,8 @@ namespace MapTracker
             if (!Interested || !host.ShareMarkers.Value || record == null || record.shared || record.dynamic || !host.Tracking.Contains(record)) return;
             foreach (var peer in peers.Values) if (peer.AcceptsDiscoveries) peer.Static.Prioritize(record);
         }
+        internal void ForgetDiscovery(string id)
+        { foreach (var peer in peers.Values) peer.Static.Forget(id); }
         internal void SendNavigationTarget(Vector3 position, string name, string type = null, string objectId = null)
         {
             float now = Time.realtimeSinceStartup;
@@ -247,7 +261,7 @@ namespace MapTracker
         private void Reset()
         {
             world = null; active = false; peers.Clear(); order.Clear(); controls.Clear(); inbox.Clear();
-            discoveries.Clear(); creatures.Clear(); cursor = 0; budget = NewBudget();
+            discoveries = EmptyDiscoveries; creatures.Clear(); cursor = 0; budget = NewBudget();
             currentCreatures.Clear();
             session = Guid.NewGuid().ToString("N"); advertised = null; nextHello = nextSnapshot = nextCreatureSnapshot = nextSend = nextTargetSend = 0;
         }

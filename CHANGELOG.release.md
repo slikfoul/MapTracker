@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.9
+
+- Stable player availability and hover hints in the preset-sharing recipient list.
+- Progressive discovery search with stable ordering while large result sets are prepared.
+- Lower-allocation discovery archive loading and multiplayer synchronization.
+- Frame-budgeted catalog and dungeon preparation with cached map-label ordering.
+- Nearby markers appear while saved discoveries are prepared.
+- Background catalog export and progressive full-map marker refresh.
+- Discovery tracking and sharing exclude transient technical effects.
+- Continuous discovery sharing without rebuilding the saved archive.
+- Loaded-area validation of shared portal discoveries.
+- Low-allocation streaming of large discovery archives.
+- Frame-budgeted preparation and saving of large discovery archives.
+
 ## 1.0.8
 
 - Share built-in and custom filter presets directly with a selected online player.

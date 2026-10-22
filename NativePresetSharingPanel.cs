@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.EventSystems;
@@ -12,18 +11,26 @@ namespace MapTracker
         private string sharingMode, incomingId;
         private RectTransform sharingDialog, recipientsContent;
         private Text sharingText;
-        private readonly List<Button> recipientButtons = new List<Button>();
+        private sealed class RecipientRow
+        {
+            internal Button Button;
+            internal Text Label;
+            internal PresetSharing.Recipient Recipient;
+            internal int Index = -1;
+        }
+        private readonly PresetRecipientRows<RecipientRow> recipientRows = new PresetRecipientRows<RecipientRow>();
+        private Button emptyRecipients;
         private FilterPreset sharingPreset;
         private float nextPlayers;
-        private string playerSignature;
-        private RectTransform recipientHint;
+        private RectTransform recipientHint, recipientHintSource;
+        private Text recipientHintText;
         internal bool SharingModalOpen => sharingRoot != null && sharingRoot.activeInHierarchy;
         private void CloseSharing()
         {
             HideRecipientHint();
             if (sharingRoot != null) { sharingRoot.SetActive(false); UnityEngine.Object.Destroy(sharingRoot); }
             sharingRoot = null; sharingDialog = recipientsContent = null; sharingText = null;
-            sharingMode = incomingId = playerSignature = null; sharingPreset = null; recipientButtons.Clear();
+            sharingMode = incomingId = null; sharingPreset = null; recipientRows.Clear(); emptyRecipients = null;
         }
         internal bool DismissSharing()
         {
@@ -64,70 +71,110 @@ namespace MapTracker
             var cancel = Button(sharingDialog, "Cancel", CloseSharing);
             Region((RectTransform)cancel.transform, Vector2.zero, new Vector2(1, 0), new Vector2(25, 22), new Vector2(-25, 55));
             window.Host.PresetSharing.CheckRecipients(true);
-            nextPlayers = 0; RefreshSharePlayers();
+            nextPlayers = Time.realtimeSinceStartup + 1; RefreshSharePlayers();
         }
         private void RefreshSharePlayers()
         {
             window.Host.PresetSharing.CheckRecipients();
             var players = window.Host.PresetSharing.Recipients();
-            string signature = string.Join("|", players.ConvertAll(p => p.Id + ":" + p.Name + ":" + p.State).ToArray());
-            if (signature == playerSignature) return;
-            playerSignature = signature;
-            HideRecipientHint();
-            foreach (var button in recipientButtons) UnityEngine.Object.Destroy(button.gameObject);
-            recipientButtons.Clear();
-            foreach (var player in players)
+            recipientRows.Refresh(players, CreateRecipientRow, UpdateRecipientRow, RemoveRecipientRow);
+            if (players.Count == 0 && emptyRecipients == null)
             {
-                var recipient = player;
-                var button = Button(recipientsContent, recipient.Name, () => PresetAction(() =>
-                {
-                    if (window.Host.PresetSharing.Send(recipient.Id, sharingPreset))
-                    { CloseSharing(); presetStatus.text = "Waiting for the player to accept…"; }
-                    else sharingText.text = "The player is unavailable or does not support preset sharing.";
-                }));
-                var label = button.GetComponentInChildren<Text>(); label.supportRichText = false;
-                label.color = recipient.CanShare ? Orange : new Color(0.52f, 0.52f, 0.52f);
-                button.interactable = recipient.CanShare;
-                var hover = button.gameObject.AddComponent<PresetRecipientHover>();
-                hover.Enter = () => ShowRecipientHint(recipient.Hint, (RectTransform)button.transform);
-                hover.Exit = HideRecipientHint;
-                StretchTop((RectTransform)button.transform, 0, recipientButtons.Count * 42, 0, 38);
-                recipientButtons.Add(button);
+                emptyRecipients = Button(recipientsContent, "No other players online", () => { });
+                emptyRecipients.interactable = false;
+                StretchTop((RectTransform)emptyRecipients.transform, 0, 0, 0, 38);
             }
-            if (players.Count == 0)
+            else if (players.Count != 0 && emptyRecipients != null)
             {
-                var empty = Button(recipientsContent, "No other players online", () => { }); empty.interactable = false;
-                StretchTop((RectTransform)empty.transform, 0, 0, 0, 38); recipientButtons.Add(empty);
+                emptyRecipients.gameObject.SetActive(false);
+                UnityEngine.Object.Destroy(emptyRecipients.gameObject); emptyRecipients = null;
             }
-            recipientsContent.sizeDelta = new Vector2(0, recipientButtons.Count * 42);
+            var size = new Vector2(0, Mathf.Max(1, players.Count) * 42);
+            if (recipientsContent.sizeDelta != size) recipientsContent.sizeDelta = size;
+        }
+        private RecipientRow CreateRecipientRow(PresetSharing.Recipient recipient)
+        {
+            var row = new RecipientRow();
+            row.Button = Button(recipientsContent, recipient.Name, () => PresetAction(() =>
+            {
+                if (window.Host.PresetSharing.Send(row.Recipient.Id, sharingPreset))
+                { CloseSharing(); presetStatus.text = "Waiting for the player to accept…"; }
+                else sharingText.text = "The player is unavailable or does not support preset sharing.";
+            }));
+            row.Label = row.Button.GetComponentInChildren<Text>(); row.Label.supportRichText = false;
+            var rect = (RectTransform)row.Button.transform;
+            var hover = row.Button.gameObject.AddComponent<PresetRecipientHover>();
+            hover.Enter = () => ShowRecipientHint(row.Recipient.Hint, rect);
+            hover.Exit = () => { if (recipientHintSource == rect) HideRecipientHint(); };
+            return row;
+        }
+        private void UpdateRecipientRow(RecipientRow row, PresetSharing.Recipient recipient, int index)
+        {
+            var previous = row.Recipient;
+            row.Recipient = recipient;
+            if (previous == null || previous.Name != recipient.Name) row.Label.text = recipient.Name;
+            if (previous == null || previous.State != recipient.State)
+            {
+                row.Label.color = recipient.CanShare ? Orange : new Color(0.52f, 0.52f, 0.52f);
+                row.Button.interactable = recipient.CanShare;
+                if (recipientHintSource == (RectTransform)row.Button.transform)
+                    ShowRecipientHint(recipient.Hint, recipientHintSource);
+            }
+            if (row.Index != index)
+            {
+                row.Index = index;
+                StretchTop((RectTransform)row.Button.transform, 0, index * 42, 0, 38);
+                row.Button.transform.SetSiblingIndex(index);
+                if (recipientHintSource == (RectTransform)row.Button.transform) PositionRecipientHint(recipientHintSource);
+            }
+        }
+        private void RemoveRecipientRow(RecipientRow row)
+        {
+            if (recipientHintSource == (RectTransform)row.Button.transform) HideRecipientHint();
+            // Destroy is deferred until the end of the frame. Hide departed rows
+            // immediately, before another row occupies the same position.
+            row.Button.gameObject.SetActive(false);
+            UnityEngine.Object.Destroy(row.Button.gameObject);
         }
         private void HideRecipientHint()
         {
             if (recipientHint != null) { recipientHint.gameObject.SetActive(false); UnityEngine.Object.Destroy(recipientHint.gameObject); }
-            recipientHint = null;
+            recipientHint = recipientHintSource = null; recipientHintText = null;
         }
         private void ShowRecipientHint(string text, RectTransform source)
         {
-            HideRecipientHint();
             if (sharingRoot == null || sharingMode != "recipients") return;
+            if (recipientHint != null && recipientHintSource == source)
+            {
+                if (recipientHintText.text != text) recipientHintText.text = text;
+                PositionRecipientHint(source);
+                return;
+            }
+            HideRecipientHint();
             var parent = (RectTransform)sharingRoot.transform;
             recipientHint = Rect("PlayerPresetHint", parent);
+            recipientHintSource = source;
             recipientHint.anchorMin = recipientHint.anchorMax = new Vector2(0.5f, 0.5f);
             recipientHint.pivot = new Vector2(0.5f, 1);
+            PositionRecipientHint(source);
+            var background = recipientHint.gameObject.AddComponent<Image>();
+            background.color = new Color(0.10f, 0.07f, 0.04f, 1); background.raycastTarget = false;
+            var frame = Rect("WoodFrame", recipientHint); Stretch(frame, 0, 0, 0, 0);
+            var wood = frame.gameObject.AddComponent<Image>(); wood.sprite = panelSprite; wood.type = Image.Type.Sliced;
+            wood.material = panelMaterial; wood.raycastTarget = false;
+            var label = recipientHintText = Label(text, recipientHint, 15, Beige, TextAnchor.MiddleLeft);
+            label.supportRichText = false; Stretch(label.rectTransform, 16, 10, 16, 10);
+            recipientHint.SetAsLastSibling();
+        }
+        private void PositionRecipientHint(RectTransform source)
+        {
+            var parent = (RectTransform)sharingRoot.transform;
             float width = Mathf.Min(390, parent.rect.width - 30);
             recipientHint.sizeDelta = new Vector2(width, 76);
             Vector3 point = parent.InverseTransformPoint(source.TransformPoint(new Vector3(source.rect.center.x, source.rect.yMin, 0)));
             float x = Mathf.Clamp(point.x, parent.rect.xMin + width * 0.5f + 12, parent.rect.xMax - width * 0.5f - 12);
             float y = Mathf.Max(parent.rect.yMin + 88, point.y - 8);
             recipientHint.anchoredPosition = new Vector2(x, y) - parent.rect.center;
-            var background = recipientHint.gameObject.AddComponent<Image>();
-            background.color = new Color(0.10f, 0.07f, 0.04f, 1); background.raycastTarget = false;
-            var frame = Rect("WoodFrame", recipientHint); Stretch(frame, 0, 0, 0, 0);
-            var wood = frame.gameObject.AddComponent<Image>(); wood.sprite = panelSprite; wood.type = Image.Type.Sliced;
-            wood.material = panelMaterial; wood.raycastTarget = false;
-            var label = Label(text, recipientHint, 15, Beige, TextAnchor.MiddleLeft);
-            label.supportRichText = false; Stretch(label.rectTransform, 16, 10, 16, 10);
-            recipientHint.SetAsLastSibling();
         }
         private void ShowPresetOffer(PresetTransfer.Incoming incoming)
         {

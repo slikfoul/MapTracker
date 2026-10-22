@@ -25,14 +25,18 @@ namespace MapTracker
             return file;
         }
         internal static Task WriteAsync(string path, MarkerFile file) => Task.Run(() => Write(path, file));
-        private static void Write(string path, MarkerFile file)
+        internal static Task WritePreparedAsync(string path, SavedMarkerFile file) => Task.Run(() => Write(path, file));
+        private static void Write(string path, object file)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path));
             string temp = path + ".tmp";
             // Stream instead of allocating a whole database-sized UTF-16 string:
             // even a worker allocation can trigger a game-wide GC pause.
             using (var output = new StreamWriter(temp, false, new UTF8Encoding(false), 16384))
-                DataJson.WriteTo(output, file);
+            {
+                if (file is SavedMarkerFile prepared) prepared.WriteTo(output);
+                else DataJson.WriteTo(output, file);
+            }
             if (File.Exists(path)) File.Replace(temp, path, path + ".bak"); else File.Move(temp, path);
         }
     }

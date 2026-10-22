@@ -176,6 +176,32 @@ try {
         $_.Operand -is [Mono.Cecil.MethodReference] -and $_.Operand.DeclaringType.Name -eq 'Tracking' -and $_.Operand.Name -eq 'get_Ready'
     })) { throw 'Sharing starts before saved-marker preparation completes.' }
     Write-Output 'PASS: no startup polling refresh; deferred budgeted marker preparation and sharing readiness gate verified.'
+    $pinAdvance = $tracking.Methods | Where-Object Name -EQ 'AdvancePinPreparation' | Select-Object -First 1
+    if (-not ($pinAdvance.Body.Instructions | Where-Object { $_.Operand -is [Mono.Cecil.MethodReference] -and $_.Operand.DeclaringType.Name -eq 'FrameWork' -and $_.Operand.Name -eq 'Advance' })) {
+        throw 'Full pin preparation must use the frame scheduler.'
+    }
+    $ownDiscoveries = $tracking.Methods | Where-Object Name -EQ 'OwnDiscoveries' | Select-Object -First 1
+    if ($ownDiscoveries.Body.Instructions | Where-Object { $_.Operand -is [Mono.Cecil.MethodReference] }) {
+        throw 'Outbound discovery access must reuse the maintained roster without scanning or copying the archive.'
+    }
+    foreach ($methodName in @('Observe','ReceiveDiscoveries')) {
+        $method = $tracking.Methods | Where-Object Name -EQ $methodName | Select-Object -First 1
+        if (-not ($method.Body.Instructions | Where-Object { $_.Operand -is [Mono.Cecil.MethodReference] -and $_.Operand.DeclaringType.Name -eq 'CatalogContent' -and $_.Operand.Name -eq 'CanTrack' })) {
+            throw ('Technical-definition exclusion missing from ' + $methodName)
+        }
+    }
+    $catalog = $plugin.MainModule.Types | Where-Object Name -EQ 'Catalog' | Select-Object -First 1
+    $export = $catalog.Methods | Where-Object Name -EQ 'Export' | Select-Object -First 1
+    if (-not ($export.Body.Instructions | Where-Object { $_.Operand -is [Mono.Cecil.MethodReference] -and $_.Operand.DeclaringType.Name -eq 'CatalogPersistence' -and $_.Operand.Name -eq 'Prepare' }) -or
+        ($export.Body.Instructions | Where-Object { $_.Operand -is [Mono.Cecil.MethodReference] -and $_.Operand.DeclaringType.Name -in @('DataJson','File') })) {
+        throw 'Catalog export must prepare detached metadata incrementally instead of serializing/writing on the game thread.'
+    }
+    $advanceExport = $catalog.Methods | Where-Object Name -EQ 'AdvanceExport' | Select-Object -First 1
+    if (-not ($advanceExport.Body.Instructions | Where-Object { $_.Operand -is [Mono.Cecil.MethodReference] -and $_.Operand.DeclaringType.Name -eq 'FrameWork' -and $_.Operand.Name -eq 'Advance' })) { throw 'Catalog export preparation must use the frame scheduler.' }
+    $exportCallbacks = @($catalog.NestedTypes | ForEach-Object { $_.Methods } | Where-Object HasBody)
+    if (-not ($exportCallbacks | ForEach-Object { $_.Body.Instructions } | Where-Object { $_.Operand -is [Mono.Cecil.MethodReference] -and $_.Operand.DeclaringType.Name -eq 'CatalogPersistence' -and $_.Operand.Name -eq 'Enqueue' })) { throw 'Prepared catalog metadata must be queued for background serialization.' }
+    if ($load.Body.Instructions | Where-Object { $_.Operand -is [Mono.Cecil.MethodReference] -and $_.Operand.DeclaringType.Name -eq 'File' -and $_.Operand.Name -eq 'ReadAllText' }) { throw 'Saved-marker loading must not allocate a whole archive-sized UTF-16 string.' }
+    Write-Output 'PASS: budgeted full pin refresh, retained outbound roster, technical exclusions and background catalog export verified.'
     if ($tick.Body.Instructions | Where-Object {
         $_.Operand -is [Mono.Cecil.MethodReference] -and $_.Operand.Name -eq 'get_Item' -and
         $_.Operand.DeclaringType.FullName -like '*Dictionary*MapTracker.MarkerRecord*'
@@ -203,19 +229,39 @@ try {
     Write-Output 'PASS: Other player pins affects native pin masking only; mod networking and marker visibility are independent.'
     $save = $tracking.Methods | Where-Object Name -EQ 'Save' | Select-Object -First 1
     $saveCalls = @($save.Body.Instructions | Where-Object { $_.Operand -is [Mono.Cecil.MethodReference] } | ForEach-Object { $_.Operand.DeclaringType.Name + '.' + $_.Operand.Name })
-    if ($saveCalls -notcontains 'DiscoverySave.Snapshot' -or $saveCalls -notcontains 'DiscoverySave.WriteAsync' -or
-        $saveCalls -contains 'DataJson.Write' -or $saveCalls -contains 'File.WriteAllText') { throw 'Database serialization or disk writes remain on the game save path.' }
+    if ($saveCalls -notcontains 'SavedMarkerPreparation.Prepare' -or $saveCalls -contains 'DiscoverySave.Snapshot' -or
+        $saveCalls -contains 'DataJson.Write' -or $saveCalls -contains 'File.WriteAllText') { throw 'Game save path must schedule bounded preparation without a whole-archive clone or serialization.' }
+    $advanceSave = $tracking.Methods | Where-Object Name -EQ 'AdvanceSavePreparation' | Select-Object -First 1
+    if (-not ($advanceSave.Body.Instructions | Where-Object {
+        $_.Operand -is [Mono.Cecil.MethodReference] -and $_.Operand.DeclaringType.Name -eq 'FrameWork' -and $_.Operand.Name -eq 'Advance'
+    }) -or -not ($tick.Body.Instructions | Where-Object {
+        $_.Operand -is [Mono.Cecil.MethodReference] -and $_.Operand.Name -eq 'AdvanceSavePreparation'
+    })) { throw 'Incremental save preparation is not advanced through the frame scheduler.' }
     $reset = $tracking.Methods | Where-Object Name -EQ 'Reset' | Select-Object -First 1
     if (@($reset.Body.Instructions | Where-Object { $_.Operand -is [Mono.Cecil.MethodReference] -and $_.Operand.Name -eq 'CompleteSave' }).Count -ne 2) {
         throw 'World exit does not flush pending and latest database snapshots.'
     }
+    if (@($reset.Body.Instructions | Where-Object { $_.Operand -is [Mono.Cecil.MethodReference] -and $_.Operand.Name -eq 'AdvanceSavePreparation' }).Count -ne 2) {
+        throw 'World exit does not finish pending and latest incremental snapshots.'
+    }
     $saveWorker = $plugin.MainModule.Types | Where-Object Name -EQ 'DiscoverySave' | Select-Object -First 1
     $write = $saveWorker.Methods | Where-Object Name -EQ 'Write' | Select-Object -First 1
     $writeCalls = @($write.Body.Instructions | Where-Object { $_.Operand -is [Mono.Cecil.MethodReference] } | ForEach-Object { $_.Operand.DeclaringType.Name + '.' + $_.Operand.Name })
-    if ($writeCalls -notcontains 'DataJson.WriteTo' -or $writeCalls -contains 'DataJson.Write' -or $writeCalls -contains 'File.WriteAllText') {
+    $preparedWrite = $saveWorker.Methods | Where-Object Name -EQ 'WritePreparedAsync' | Select-Object -First 1
+    if (-not ($preparedWrite.Body.Instructions | Where-Object {
+        $_.Operand -is [Mono.Cecil.MethodReference] -and $_.Operand.Name -eq 'Run' -and $_.Operand.DeclaringType.FullName -eq 'System.Threading.Tasks.Task'
+    })) { throw 'Prepared marker serialization is not scheduled on a worker.' }
+    if ($writeCalls -notcontains 'SavedMarkerFile.WriteTo' -or $writeCalls -notcontains 'DataJson.WriteTo' -or $writeCalls -contains 'DataJson.Write' -or $writeCalls -contains 'File.WriteAllText') {
         throw 'Save worker still allocates a whole database-sized JSON string.'
     }
-    Write-Output 'PASS: background streamed persistence and world-exit save flushing verified.'
+    Write-Output 'PASS: typed background streamed persistence and world-exit save flushing verified.'
+    $reconcilePortals = $tracking.Methods | Where-Object Name -EQ 'ReconcilePortals' | Select-Object -First 1
+    if (-not ($reconcilePortals.Body.Instructions | Where-Object { $_.Operand -is [Mono.Cecil.FieldReference] -and $_.Operand.Name -eq 'portalRecords' }) -or
+        ($reconcilePortals.Body.Instructions | Where-Object { $_.Operand -is [Mono.Cecil.FieldReference] -and $_.Operand.Name -eq 'records' }) -or
+        -not ($reconcilePortals.Body.Instructions | Where-Object { $_.Operand -is [Mono.Cecil.MethodReference] -and $_.Operand.DeclaringType.Name -eq 'PortalReconciliation' -and $_.Operand.Name -eq 'Eligible' })) {
+        throw 'Portal reconciliation must validate the dedicated portal set, including peer discoveries, without scanning the whole archive.'
+    }
+    Write-Output 'PASS: local and shared portal validation uses the dedicated portal index.'
     $mapClick = $tracking.Methods | Where-Object Name -EQ 'MapClick' | Select-Object -First 1
     $clickCalls = @($mapClick.Body.Instructions | Where-Object { $_.Operand -is [Mono.Cecil.MethodReference] } | ForEach-Object { $_.Operand.DeclaringType.Name + '.' + $_.Operand.Name })
     if ($clickCalls -notcontains 'DungeonProgress.Toggle' -or $clickCalls -notcontains 'Plugin.ProgressChanged') {

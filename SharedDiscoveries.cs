@@ -126,15 +126,31 @@ namespace MapTracker
             return changed;
         }
         internal static IEnumerable<byte> RemoveDuplicatesIncrementally(IDictionary<string, MarkerRecord> records,
-            Action<MarkerRecord> removePin, Action changed, Action<SharedDiscoveryIndex> completed = null)
+            Action<MarkerRecord> removePin, Action changed, Action<SharedDiscoveryIndex> completed = null,
+            SharedDiscoveryIndex workingIndex = null)
         {
-            var index = new SharedDiscoveryIndex(new MarkerRecord[0]) { CandidateIsCurrent = r => MarkerLifetime.Current(records, r) };
-            foreach (var record in records.Values.Where(r => !r.dynamic && r.entry != null && !r.entry.creature)
-                .OrderBy(r => r.shared).ThenByDescending(r => r.live).ThenBy(r => r.id, StringComparer.Ordinal).ToList())
+            var index = workingIndex ?? new SharedDiscoveryIndex(new MarkerRecord[0]);
+            index.CandidateIsCurrent = r => MarkerLifetime.Current(records, r);
+            var source = records.Values.ToArray();
+            var ordered = new PreparationEntry[source.Length]; int count = 0;
+            foreach (var record in source)
             {
+                if (!record.dynamic && record.entry != null && !record.entry.creature)
+                    ordered[count++] = new PreparationEntry(record);
+                yield return 0;
+            }
+            foreach (var step in FrameWork.StableSort(ordered, count, PreparationEntry.Compare)) yield return step;
+            for (int i = 0; i < count; i++)
+            {
+                var record = ordered[i].Record;
                 if (!MarkerLifetime.Current(records, record)) { yield return 0; continue; }
                 var canonical = index.FindSite(record.type, record.position, record.dungeonOrigin);
                 if (canonical == null) { index.Add(record); yield return 0; continue; }
+                if (ReferenceEquals(canonical, record)) { yield return 0; continue; }
+                // Live scanning can populate the shared index while archive work
+                // yields. Preserve the same local/live/ID preference in that case.
+                if (PreparationEntry.Compare(new PreparationEntry(record), new PreparationEntry(canonical)) < 0)
+                { var previous = canonical; canonical = record; record = previous; index.Add(canonical); }
                 if (canonical.entry?.dungeon == true) { DungeonDiscoveries.Merge(canonical, record); index.Add(canonical); }
                 if (canonical.shared == record.shared)
                 {
@@ -145,6 +161,20 @@ namespace MapTracker
                 yield return 0;
             }
             completed?.Invoke(index);
+        }
+        private struct PreparationEntry
+        {
+            internal readonly MarkerRecord Record;
+            private readonly bool shared, live;
+            private readonly string id;
+            internal PreparationEntry(MarkerRecord record)
+            { Record = record; shared = record.shared; live = record.live; id = record.id; }
+            internal static int Compare(PreparationEntry a, PreparationEntry b)
+            {
+                int order = a.shared.CompareTo(b.shared);
+                if (order == 0) order = b.live.CompareTo(a.live);
+                return order == 0 ? StringComparer.Ordinal.Compare(a.id, b.id) : order;
+            }
         }
     }
 }

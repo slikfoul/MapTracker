@@ -244,6 +244,14 @@ var reconciliationType = typeof(MarkerFile).Assembly.GetType("MapTracker.PortalR
 var reconciliationCheck = reconciliationType.GetMethod("Check", recordFlags);
 var reconciliationClear = reconciliationType.GetMethod("Clear", recordFlags);
 var reconciliation = Activator.CreateInstance(reconciliationType, true);
+var portalEligible=reconciliationType.GetMethod("Eligible",lifetimeFlags);
+var rememberedPeerPortal=SharedRecord("old-peer-portal",sharedPortalEntry,new Vector3(399.908875f,33.3619461f,-8369.645f),true);
+var replacementPortal=SharedRecord("new-local-portal",sharedPortalEntry,new Vector3(389.6437f,32.83584f,-8363.943f));
+Check((bool)portalEligible.Invoke(null,new object[]{rememberedPeerPortal})&&
+    (bool)portalEligible.Invoke(null,new object[]{replacementPortal}),
+    "remembered peer portals and local replacement portals both receive native-world validation");
+Check(!(bool)portalEligible.Invoke(null,new object[]{SharedRecord("not-a-portal",mineEntry,Vector3.zero)}),
+    "portal validation does not reinterpret other saved discovery kinds");
 bool Reconcile(string id, bool ready, bool exists, float time) =>
     (bool)reconciliationCheck.Invoke(reconciliation, new object[] { id, ready, exists, time });
 Check(!Reconcile("ghost", true, false, 0), "one ready-area absence cannot remove an old portal");
@@ -266,6 +274,14 @@ Check(!Reconcile("paused", true, false, 20), "a long gap between checks restarts
 for (int time = 0; time < 11; time++) Reconcile("world-change", true, false, time);
 reconciliationClear.Invoke(reconciliation, null);
 Check(!Reconcile("world-change", true, false, 30), "world changes clear pending portal reconciliation");
+bool oldPeerRetired=false,newLocalRetired=false;
+for(int time=0;time<=12;time++)
+{
+    oldPeerRetired|=Reconcile(rememberedPeerPortal.id,true,false,time);
+    newLocalRetired|=Reconcile(replacementPortal.id,true,true,time);
+}
+Check(oldPeerRetired&&!newLocalRetired,
+    "destroying a remembered peer portal while away then building elsewhere retires only the proven missing portal");
 
 // Exercise the same grouped filter builder used by the window, with localization
 // supplied explicitly so this check does not initialize Unity's localization singleton.
@@ -1120,18 +1136,37 @@ startupRecords.Add(oldDuplicate.id, oldDuplicate);
 int cleanupChanges = 0;
 var incrementalCleanup = sharingType.GetMethod("RemoveDuplicatesIncrementally", lifetimeFlags);
 var cleanupSteps = ((IEnumerable<byte>)incrementalCleanup.Invoke(null,
-    new object[] { startupRecords, removePin, (Action)(() => cleanupChanges++), null })).GetEnumerator();
+    new object[] { startupRecords, removePin, (Action)(() => cleanupChanges++), null, null })).GetEnumerator();
 int cleanupItems = 0;
 Check(cleanupSteps.MoveNext() && cleanupChanges == 0 && startupRecords.Count == 18001,
     "startup cleanup yields before processing the entire archive");
 cleanupItems++;
 while (cleanupSteps.MoveNext()) cleanupItems++;
 cleanupSteps.Dispose();
-Check(cleanupItems == 18001 && cleanupChanges == 1 && startupRecords.Count == 18000 &&
+Check(cleanupItems > 18001 && cleanupChanges == 1 && startupRecords.Count == 18000 &&
     archived[0].completed && !startupRecords.ContainsKey(oldDuplicate.id),
-    "incremental startup reconciliation processes each record once and preserves merged completion state");
+    "startup sorting and reconciliation both yield while preserving the canonical record and merged completion state");
 Check(!cleanupSteps.MoveNext() && cleanupChanges == 1,
     "completed duplicate reconciliation cannot repeatedly remove or merge records");
+var startupConcurrent=new Dictionary<string,MarkerRecord>();
+var earlierMemory=SharedRecord("early:memory",sharedPortalEntry,new Vector3(24,0,48));
+earlierMemory.favorite=true;earlierMemory.visited=true;startupConcurrent.Add(earlierMemory.id,earlierMemory);
+var startupIndex=Activator.CreateInstance(indexType,recordFlags,null,new object[]{Array.Empty<MarkerRecord>()},null);
+int concurrentChanges=0;
+var concurrentCleanup=((IEnumerable<byte>)incrementalCleanup.Invoke(null,
+    new object[]{startupConcurrent,removePin,(Action)(()=>concurrentChanges++),null,startupIndex})).GetEnumerator();
+Check(concurrentCleanup.MoveNext(),"archive preparation yields before a nearby live observation is added");
+var earlyLive=SharedRecord("early:live",sharedPortalEntry,earlierMemory.position);
+typeof(MarkerRecord).GetField("live",recordFlags).SetValue(earlyLive,true);startupConcurrent.Add(earlyLive.id,earlyLive);
+indexAdd.Invoke(startupIndex,new object[]{earlyLive});
+while(concurrentCleanup.MoveNext()){}
+Check(startupConcurrent.Count==1&&startupConcurrent.ContainsKey(earlyLive.id)&&earlyLive.favorite&&earlyLive.visited&&concurrentChanges==1,
+    "nearby live markers added during archive preparation survive reconciliation and retain saved progress without duplicates");
+var selfCleanup=((IEnumerable<byte>)incrementalCleanup.Invoke(null,
+    new object[]{startupConcurrent,removePin,(Action)(()=>concurrentChanges++),null,startupIndex})).GetEnumerator();
+while(selfCleanup.MoveNext()){}
+Check(startupConcurrent.Count==1&&concurrentChanges==1,
+    "an early live marker already present in the shared spatial index cannot retire itself");
 
 // Run the actual Tracking retirement path without constructing a Unity scene.
 // UI references stay null; real dictionary, working sets and spatial index are exercised.
@@ -1140,14 +1175,26 @@ var lifecycleTracking = System.Runtime.CompilerServices.RuntimeHelpers.GetUninit
 var lifecycleRecords = new Dictionary<string, MarkerRecord>();
 trackingType.GetField("records", recordFlags).SetValue(lifecycleTracking, lifecycleRecords);
 var lifecycleSets = new Dictionary<string, HashSet<MarkerRecord>>();
-foreach (string setName in new[] { "pinnedRecords", "dynamicRecords", "liveRecords", "remoteStaticRecords", "pinChanges" })
+foreach (string setName in new[] { "pinnedRecords", "dynamicRecords", "liveRecords", "remoteStaticRecords", "pinChanges", "portalRecords" })
 {
     var set = new HashSet<MarkerRecord>(); lifecycleSets.Add(setName, set);
     trackingType.GetField(setName, recordFlags).SetValue(lifecycleTracking, set);
 }
 var lifecycleReconciliationType = typeof(MarkerFile).Assembly.GetType("MapTracker.PortalReconciliation");
+var rosterType=typeof(MarkerFile).Assembly.GetType("MapTracker.DiscoveryRoster");
+var lifecycleRoster=Activator.CreateInstance(rosterType,true);
+trackingType.GetField("discoveryRoster",recordFlags).SetValue(lifecycleTracking,lifecycleRoster);
+var updateRoster=(Action<MarkerRecord>)rosterType.GetMethod("Update",recordFlags).CreateDelegate(typeof(Action<MarkerRecord>),lifecycleRoster);
+var clearRoster=(Action)rosterType.GetMethod("Clear",recordFlags).CreateDelegate(typeof(Action),lifecycleRoster);
 trackingType.GetField("portalReconciliation", recordFlags).SetValue(lifecycleTracking,
     Activator.CreateInstance(lifecycleReconciliationType, nonPublic: true));
+var refreshOnePin=trackingType.GetMethod("RefreshPin",recordFlags);
+refreshOnePin.Invoke(lifecycleTracking,new object[]{rememberedPeerPortal});
+refreshOnePin.Invoke(lifecycleTracking,new object[]{replacementPortal});
+Check(lifecycleSets["portalRecords"].SetEquals(new[]{rememberedPeerPortal,replacementPortal}),
+    "normal pin preparation indexes local and shared portals before native map UI is available");
+lifecycleSets["portalRecords"].Clear();
+clearRoster();
 Action<MarkerRecord> retire = (Action<MarkerRecord>)trackingType.GetMethod("ForgetRecord", recordFlags)
     .CreateDelegate(typeof(Action<MarkerRecord>), lifecycleTracking);
 var retiredCreature = SharedRecord("retirement:creature", mobEntry, Vector3.zero);
@@ -1186,7 +1233,7 @@ var keptNeighbor = SharedRecord("b-neighbor", sharedPortalEntry, removedAnchor.p
 betweenFrames.Add(removedAnchor.id, removedAnchor); betweenFrames.Add(keptNeighbor.id, keptNeighbor);
 int raceChanges = 0;
 var raceSteps = ((IEnumerable<byte>)incrementalCleanup.Invoke(null,
-    new object[] { betweenFrames, removePin, (Action)(() => raceChanges++), null })).GetEnumerator();
+    new object[] { betweenFrames, removePin, (Action)(() => raceChanges++), null, null })).GetEnumerator();
 raceSteps.MoveNext(); betweenFrames.Remove(removedAnchor.id);
 while (raceSteps.MoveNext()) { }
 raceSteps.Dispose();
@@ -1214,27 +1261,113 @@ foreach (var field in filterPanelType.GetFields(recordFlags))
     buffer.Add(element == typeof(bool) ? (object)true : element == typeof(string) ? "old-world" : null);
     field.SetValue(releasedPanel, buffer); panelLists.Add(buffer);
 }
+// This fixture bypasses the Unity-facing panel constructor. Initialize its
+// keyed recipient cache as well as the list caches above, then verify cleanup.
+var recipientCacheField = filterPanelType.GetField("recipientRows", recordFlags);
+var recipientCache = Activator.CreateInstance(recipientCacheField.FieldType, nonPublic: true);
+recipientCacheField.SetValue(releasedPanel, recipientCache);
+var recipientCacheRows = (System.Collections.IDictionary)recipientCacheField.FieldType.GetField("rows", recordFlags).GetValue(recipientCache);
+recipientCacheRows.Add(99L, System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(recipientCacheField.FieldType.GetGenericArguments()[0]));
 filterPanelType.GetField("previousCount", recordFlags).SetValue(releasedPanel, 100);
 filterPanelType.GetField("categorySignature", recordFlags).SetValue(releasedPanel, "old-world");
 filterPanelType.GetMethod("Dispose", recordFlags).Invoke(releasedPanel, null);
-Check(panelLists.All(buffer => buffer.Count == 0) &&
+Check(panelLists.All(buffer => buffer.Count == 0) && recipientCacheRows.Count == 0 &&
     (int)filterPanelType.GetField("previousCount", recordFlags).GetValue(releasedPanel) == -1 &&
     filterPanelType.GetField("categorySignature", recordFlags).GetValue(releasedPanel) == null,
     "world-exit UI cleanup releases filter, preset and discovery row caches before the next world rebuild");
 filterPanelType.GetMethod("Dispose", recordFlags).Invoke(releasedPanel, null);
-Check(panelLists.All(buffer => buffer.Count == 0), "repeated UI cleanup after leaving a world is safe");
+Check(panelLists.All(buffer => buffer.Count == 0) && recipientCacheRows.Count == 0, "repeated UI cleanup after leaving a world is safe");
 
-trackingType.GetField("secondaryDiscoveries", recordFlags).SetValue(lifecycleTracking, new List<MarkerRecord>());
 var bulkEntry=new CatalogEntry {key="prefab:archive-bulk",category="Destructibles"};
 for(int i=0;i<500;i++) {var item=SharedRecord("bulk:"+i,bulkEntry,new Vector3(i,0,0));lifecycleRecords.Add(item.id,item);}
+var transientEffectEntry=new CatalogEntry {key="prefab:sfx_vulture_wing_flap",category="Other",technical=true};
+var transientEffect=SharedRecord("technical:sound",transientEffectEntry,Vector3.zero);
+lifecycleRecords.Add(transientEffect.id,transientEffect);
+var canTrack=typeof(MarkerFile).Assembly.GetType("MapTracker.CatalogContent").GetMethod("CanTrack",lifetimeFlags);
+Check(!(bool)canTrack.Invoke(null,new object[]{transientEffectEntry})&&
+    (bool)canTrack.Invoke(null,new object[]{bulkEntry})&&(bool)canTrack.Invoke(null,new object[]{sharedPortalEntry}),
+    "technical audio/visual records are ineligible for tracking while real structures and portals remain eligible");
+var noiseCatalogType=typeof(MarkerFile).Assembly.GetType("MapTracker.Catalog");
+var noiseCatalog=System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(noiseCatalogType);
+var ignoredNoise=new List<CatalogEntry>();var noiseTypes=new Dictionary<string,CatalogEntry>();var detectionTypes=new Dictionary<int,CatalogEntry>();
+noiseCatalogType.GetField("ignoredTechnical",recordFlags).SetValue(noiseCatalog,ignoredNoise);
+noiseCatalogType.GetField("liveTypes",recordFlags).SetValue(noiseCatalog,noiseTypes);
+noiseCatalogType.GetMethod("Add",recordFlags).Invoke(noiseCatalog,new object[]{transientEffectEntry,detectionTypes,null});
+Check(detectionTypes.Count==0&&ignoredNoise.Single()==transientEffectEntry&&
+    noiseCatalogType.GetMethod("GetSavedDefinition",recordFlags).Invoke(noiseCatalog,new object[]{transientEffectEntry.key})==null,
+    "technical definitions never enter runtime detection or saved-record resolution and require no configuration binding");
 var distantDungeon=SharedRecord("priority:dungeon",mineEntry,new Vector3(10000,0,10000));
 var distantPortal=SharedRecord("priority:portal",sharedPortalEntry,new Vector3(-10000,0,-10000));
 lifecycleRecords.Add(distantDungeon.id,distantDungeon);lifecycleRecords.Add(distantPortal.id,distantPortal);
-var outboundArchive=(List<MarkerRecord>)trackingType.GetMethod("OwnDiscoveries",recordFlags).Invoke(lifecycleTracking,null);
+foreach(var record in lifecycleRecords.Values)updateRoster(record);
+var readRoster=(Func<IReadOnlyList<MarkerRecord>>)trackingType.GetMethod("OwnDiscoveries",recordFlags)
+    .CreateDelegate(typeof(Func<IReadOnlyList<MarkerRecord>>),lifecycleTracking);
+var outboundArchive=readRoster();
 Check(outboundArchive.Count==502 && outboundArchive.Take(2).Contains(distantDungeon)&&outboundArchive.Take(2).Contains(distantPortal),
-    "all saved local discoveries remain eligible and distant saved dungeons/portals precede bulk archive objects");
+    "outbound sharing excludes technical effects while retaining all real discoveries and prioritizing distant dungeons/portals");
+long rosterBefore=GC.GetAllocatedBytesForCurrentThread();
+for(int i=0;i<10000;i++)if(!ReferenceEquals(outboundArchive,readRoster()))throw new Exception("roster instance changed");
+long rosterAllocation=GC.GetAllocatedBytesForCurrentThread()-rosterBefore;
+Check(rosterAllocation<1024,"repeated outbound archive access reuses its membership index without recurring whole-archive allocations");
+distantPortal.shared=true;updateRoster(distantPortal);
+Check(!outboundArchive.Contains(distantPortal)&&outboundArchive.Count==501,
+    "switching an indexed portal to shared-only ownership removes it from outbound discoveries");
+distantPortal.shared=false;distantPortal.id="priority:rebound-portal";updateRoster(distantPortal);
+Check(outboundArchive.Count==502&&outboundArchive.Take(2).Contains(distantPortal),
+    "local rebinding reuses the record identity and retains portal priority without duplicate roster slots");
 
 var saveType=typeof(MarkerFile).Assembly.GetType("MapTracker.DiscoverySave");
+var incrementalSaveType=typeof(MarkerFile).Assembly.GetType("MapTracker.SavedMarkerPreparation");
+var preparedFileType=typeof(MarkerFile).Assembly.GetType("MapTracker.SavedMarkerFile");
+object preparedFile=null;
+Action<object> receivePrepared=value=>preparedFile=value;
+var preparedParameter=System.Linq.Expressions.Expression.Parameter(preparedFileType);
+var preparedCallback=System.Linq.Expressions.Expression.Lambda(typeof(Action<>).MakeGenericType(preparedFileType),
+    System.Linq.Expressions.Expression.Invoke(System.Linq.Expressions.Expression.Constant(receivePrepared),
+        System.Linq.Expressions.Expression.Convert(preparedParameter,typeof(object))),preparedParameter).Compile();
+var prepareSave=incrementalSaveType.GetMethod("Prepare",lifetimeFlags);
+var incrementalRecords=new Dictionary<string,MarkerRecord>();
+for(int i=0;i<2051;i++) incrementalRecords.Add("incremental:"+i,SharedRecord("incremental:"+i,mineEntry,new Vector3(i,2,3)));
+incrementalRecords["incremental:0"].dungeonOrigin=new Vector3(-12.25f,4.5f,6000.125f);
+incrementalRecords["incremental:0"].dungeonAliases=new[]{"prior-id","alias\"Юникод"};
+incrementalRecords["incremental:0"].portalTag="tag\"\\\nЮникод";
+incrementalRecords["incremental:0"].completionRevision=long.MaxValue-1;
+var beforeIncremental=(MarkerFile)saveType.GetMethod("Snapshot",lifetimeFlags).Invoke(null,new object[]{"incremental-world","incremental-character",incrementalRecords.Values});
+var incrementalWork=((IEnumerable<byte>)prepareSave.Invoke(null,new object[]{"incremental-world","incremental-character",incrementalRecords.Values,preparedCallback})).GetEnumerator();
+Check(incrementalWork.MoveNext()&&preparedFile==null,"save preparation yields before copying the whole archive");
+incrementalRecords.Add("late",SharedRecord("late",mineEntry,Vector3.zero));
+int incrementalSteps=1;while(incrementalWork.MoveNext())incrementalSteps++;
+incrementalWork.Dispose();
+Check(incrementalSteps==2051&&DataJson.Write(preparedFile,true)==DataJson.Write(beforeIncremental,true),
+    "chunked save preserves the exact JSON schema/order and tolerates new discoveries while copying");
+var preparedRows=(System.Collections.IEnumerable)preparedFileType.GetField("markers").GetValue(preparedFile);
+var capturedRows=preparedRows.Cast<object>().ToArray();
+string frozenPrepared=DataJson.Write(preparedFile,true);
+incrementalRecords["incremental:0"].favorite=true;
+Check(DataJson.Write(preparedFile,true)==frozenPrepared,"a prepared save remains immutable after live marker changes");
+preparedFile=null;
+foreach(var step in (IEnumerable<byte>)prepareSave.Invoke(null,new object[]{"incremental-world","incremental-character",incrementalRecords.Values,preparedCallback})){}
+var nextPreparedRows=((System.Collections.IEnumerable)preparedFileType.GetField("markers").GetValue(preparedFile)).Cast<object>().ToArray();
+Check(nextPreparedRows.Length==2052&&!ReferenceEquals(capturedRows[0],nextPreparedRows[0])&&ReferenceEquals(capturedRows[1],nextPreparedRows[1]),
+    "following saves reuse immutable unchanged rows and replace only changed rows");
+var typedPreparedWrite=preparedFileType.GetMethod("WriteTo",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.Public|System.Reflection.BindingFlags.NonPublic);
+using(var preparedText=new StringWriter(System.Globalization.CultureInfo.InvariantCulture))
+{
+    typedPreparedWrite.Invoke(preparedFile,new object[]{preparedText});
+    Check(preparedText.ToString()==DataJson.Write(preparedFile,true),
+        "typed worker serialization exactly preserves optional origins, aliases, escaped Unicode, numeric fields and JSON formatting");
+}
+var genericPreparedWrite=typeof(DataJson).GetMethod("WriteTo",lifetimeFlags);
+typedPreparedWrite.Invoke(preparedFile,new object[]{TextWriter.Null});
+genericPreparedWrite.Invoke(null,new object[]{TextWriter.Null,preparedFile});
+long typedBefore=GC.GetAllocatedBytesForCurrentThread();
+typedPreparedWrite.Invoke(preparedFile,new object[]{TextWriter.Null});
+long typedAllocated=GC.GetAllocatedBytesForCurrentThread()-typedBefore;
+long genericBefore=GC.GetAllocatedBytesForCurrentThread();
+genericPreparedWrite.Invoke(null,new object[]{TextWriter.Null,preparedFile});
+long genericAllocated=GC.GetAllocatedBytesForCurrentThread()-genericBefore;
+Check(typedAllocated<genericAllocated/2,"typed worker serialization avoids the bulk of recurring primitive-boxing allocations");
+System.Console.WriteLine($"SAVE WRITER ALLOCATIONS: generic={genericAllocated} bytes; typed={typedAllocated} bytes for 2052 markers; managed runtime, not Unity frame timing.");
 var makeSnapshot=saveType.GetMethod("Snapshot",lifetimeFlags);
 var writeSnapshot=saveType.GetMethod("WriteAsync",lifetimeFlags);
 var savedRecord=SharedRecord("save-check",mineEntry,new Vector3(100,2,300));
@@ -1250,6 +1383,48 @@ Check(detached.markers.Count==1 && detached.markers[0].position.x==100 && detach
 string workerFolder=Path.Combine(Environment.CurrentDirectory,"artifacts","MapTrackerSaveChecks-"+Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(workerFolder);
 try {
+    var catalogWriterType=typeof(MarkerFile).Assembly.GetType("MapTracker.CatalogPersistence");
+    var catalogSnapshotMethod=catalogWriterType.GetMethod("Snapshot",lifetimeFlags);
+    var exportEntry=new CatalogEntry {key="prefab:export-test",prefab="export-test",name="Export test",category="Other",
+        products=new[]{"original-product"},components=new[]{"Destructible"}};
+    var exportSnapshot=(CatalogDocument)catalogSnapshotMethod.Invoke(null,new object[]{new[]{exportEntry},new[]{"original-warning"},"test-version","test-game"});
+    string frozenCatalog=DataJson.Write(exportSnapshot,true);
+    exportEntry.name="changed-live-name";exportEntry.products[0]="changed-live-product";
+    Check(DataJson.Write(exportSnapshot,true)==frozenCatalog,
+        "background catalog snapshots detach mutable metadata arrays and remain unchanged after live definitions change");
+    var catalogWriter=Activator.CreateInstance(catalogWriterType,true);
+    var enqueueCatalog=catalogWriterType.GetMethod("Enqueue",recordFlags);
+    var takeCatalogError=catalogWriterType.GetMethod("TakeError",recordFlags);
+    string catalogDestination=Path.Combine(workerFolder,"catalog.json");
+    var exportFirst=(Task)enqueueCatalog.Invoke(catalogWriter,new object[]{catalogDestination,exportSnapshot});
+    var exportLatest=(CatalogDocument)catalogSnapshotMethod.Invoke(null,new object[]{new[]{exportEntry},Array.Empty<string>(),"next-version","test-game"});
+    var exportSecond=(Task)enqueueCatalog.Invoke(catalogWriter,new object[]{catalogDestination,exportLatest});
+    exportSecond.GetAwaiter().GetResult();
+    Check(takeCatalogError.Invoke(catalogWriter,null)==null&&File.ReadAllText(catalogDestination)==DataJson.Write(exportLatest,true)&&
+        File.ReadAllText(catalogDestination+".bak")==frozenCatalog,
+        "queued catalog exports complete in request order, preserve the format and retain the preceding cache backup");
+    Directory.CreateDirectory(catalogDestination+".tmp");
+    ((Task)enqueueCatalog.Invoke(catalogWriter,new object[]{catalogDestination,exportSnapshot})).GetAwaiter().GetResult();
+    Check(takeCatalogError.Invoke(catalogWriter,null) is Exception&&File.ReadAllText(catalogDestination)==DataJson.Write(exportLatest,true),
+        "failed background catalog exports retain the complete preceding file and expose an error for the game thread");
+    Directory.Delete(catalogDestination+".tmp");
+    ((Task)enqueueCatalog.Invoke(catalogWriter,new object[]{catalogDestination,exportSnapshot})).GetAwaiter().GetResult();
+    Check(takeCatalogError.Invoke(catalogWriter,null)==null&&File.ReadAllText(catalogDestination)==frozenCatalog,
+        "a catalog export failure does not poison later export requests");
+    string preparedDestination=Path.Combine(workerFolder,"prepared.json");
+    var writePrepared=saveType.GetMethod("WritePreparedAsync",lifetimeFlags);
+    ((Task)writePrepared.Invoke(null,new object[]{preparedDestination,preparedFile})).GetAwaiter().GetResult();
+    string preparedSaved=File.ReadAllText(preparedDestination);
+    Check(preparedSaved==DataJson.Write(preparedFile,true)&&DataJson.Read<MarkerFile>(preparedSaved).markers.Count==2052,
+        "the typed worker path writes a complete discovery file readable by the existing loader");
+    ((Task)writePrepared.Invoke(null,new object[]{preparedDestination,preparedFile})).GetAwaiter().GetResult();
+    Check(File.ReadAllText(preparedDestination+".bak")==preparedSaved,
+        "typed worker writes retain the preceding discovery save as an atomic backup");
+    Directory.CreateDirectory(preparedDestination+".tmp");bool preparedFailed=false;
+    try{((Task)writePrepared.Invoke(null,new object[]{preparedDestination,preparedFile})).GetAwaiter().GetResult();}
+    catch(IOException){preparedFailed=true;}catch(UnauthorizedAccessException){preparedFailed=true;}
+    Check(preparedFailed&&File.ReadAllText(preparedDestination)==preparedSaved,
+        "a failed typed worker write preserves the last complete discovery file");
     string destination=Path.Combine(workerFolder,"markers.json");
     ((Task)writeSnapshot.Invoke(null,new object[]{destination,detached})).GetAwaiter().GetResult();
     var persisted=DataJson.Read<MarkerFile>(File.ReadAllText(destination));
@@ -1466,6 +1641,8 @@ var oldUnanchoredPacket=EntranceRecord("no-origin-still-shareable",reportedRoot)
 rememberDungeonAlias.Invoke(null,new object[]{oldUnanchoredPacket,"another-legacy-id"});
 Check(oldUnanchoredPacket.dungeonAliases==null,
     "unanchored legacy merges cannot create alias metadata that would make ordinary discovery packets invalid");
+PositionReadChecks.Run(Check);
+DungeonPreparationChecks.Run(Check);
 if(args.Length==2&&args[0]=="--save-benchmark") {
     var actual=DataJson.Read<MarkerFile>(File.ReadAllText(args[1]));
     var watch=System.Diagnostics.Stopwatch.StartNew();

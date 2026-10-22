@@ -8,7 +8,7 @@ namespace MapTracker
     {
         private readonly RaycastHit[] hits = new RaycastHit[32];
         private readonly Vector3[] samples = new Vector3[6];
-        private Plane[] planes;
+        private readonly Plane[] planes = new Plane[6];
         private Camera camera;
         private sealed class Geometry
         {
@@ -26,7 +26,7 @@ namespace MapTracker
             {
                 frame = Time.frameCount; remaining = 64;
                 camera = Utils.GetMainCamera();
-                planes = camera != null ? GeometryUtility.CalculateFrustumPlanes(camera) : null;
+                if (camera != null) GeometryUtility.CalculateFrustumPlanes(camera, planes);
             }
             if (camera == null || player == null) return true;
             var bounds = new Bounds(position + Vector3.up, new Vector3(1, 2, 1));

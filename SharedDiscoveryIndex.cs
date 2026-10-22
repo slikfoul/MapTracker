@@ -69,7 +69,7 @@ namespace MapTracker
         }
         internal void Add(MarkerRecord record)
         {
-            if (record.dynamic || record.entry == null || record.entry.creature) { Remove(record); return; }
+            if (record.dynamic || !CatalogContent.CanTrack(record.entry) || record.entry.creature) { Remove(record); return; }
             string type = string.IsNullOrEmpty(record.type) ? record.entry.key : record.type;
             if (string.IsNullOrEmpty(type)) return;
             var first = Key(type, record.position);

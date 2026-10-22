@@ -308,6 +308,97 @@ static class Checks
         pendingProgress.Current=_=>false;
         Check(pendingProgress.Select(Array.Empty<MarkerRecord>(),3,false).Count==0&&((System.Collections.IDictionary)urgentField.GetValue(pendingProgress)).Count==0,
             "retired or replaced dungeon records cannot escape through the priority queue");
+        var compact = new SharingDelta();
+        var compactRecord = Record(42); compactRecord.dungeonOrigin = new Vector3(42, 0, 42);
+        compactRecord.dungeonAliases = new[] { "old:42" };
+        var compactRows = new[] { compactRecord };
+        compact.Commit(compactRows, 0);
+        Check(compact.Select(compactRows, 119.9f, false).Count == 0 && compact.Select(compactRows, 120, false).Count == 1,
+            "compact acknowledgements preserve the 120-second retained discovery refresh threshold");
+        compactRecord.observed = true; compact.Commit(compactRows, 200);
+        Check(compact.Select(compactRows, 214.9f, false).Count == 0 && compact.Select(compactRows, 215, false).Count == 1,
+            "compact acknowledgements preserve the 15-second observed discovery refresh threshold");
+        compact.Commit(compactRows, 300);
+        Check(compact.Select(compactRows, 302.9f, true).Count == 0 && compact.Select(compactRows, 303, true).Count == 1,
+            "compact acknowledgements preserve the three-second creature refresh threshold");
+        compactRecord.dungeonAliases[0] = "new:42";
+        var aliasUpdate = compact.Select(compactRows, 304, false);
+        Check(aliasUpdate.Count == 1 && aliasUpdate[0].dungeonAliases[0] == "new:42",
+            "acknowledged aliases are detached from later source-array mutation");
+        compactRecord.dungeonAliases[0] = "latest:42";
+        compact.Commit(aliasUpdate, 305);
+        Check(aliasUpdate[0].dungeonAliases[0] == "new:42" && compact.Select(compactRows, 305.1f, false).Count == 1,
+            "selected pending packets remain immutable while newer alias changes are detected");
+        compact.Commit(compactRows, 400);
+        compactRecord.position.x += 0.05f;
+        Check(compact.Select(compactRows, 400.1f, true).Count == 0 && compact.Select(compactRows, 400.21f, false).Count == 1,
+            "compact comparison retains creature position tolerance and exact static positions");
+        var fieldChanges = new Action<MarkerRecord>[] {
+            r=>r.type="new_type", r=>r.portalTag="new tag", r=>r.collected=!r.collected, r=>r.visited=!r.visited,
+            r=>r.completed=!r.completed, r=>r.observed=!r.observed, r=>r.imported=!r.imported, r=>r.completionRevision++,
+            r=>r.completionAuthor++, r=>r.pickedTime++, r=>r.creatureLevel++, r=>r.creatureRelation++,
+            r=>r.dungeonOrigin=new Vector3(99,0,99), r=>r.dungeonAliases=new[]{"replacement"}
+        };
+        bool detectsFields = true;
+        foreach (var change in fieldChanges) {
+            var r = Record(7); var rows = new[] { r }; var delta = new SharingDelta(); delta.Commit(rows, 0); change(r);
+            detectsFields &= delta.Select(rows, 0.1f, false).Count == 1;
+        }
+        Check(detectsFields, "compact acknowledged state detects every comparable discovery/progress field");
+        var quietDelta = new SharingDelta(); var quietRows = new[] { Record(1) };
+        quietDelta.Commit(quietRows, 0);
+        for(int i=0;i<10000;i++)quietDelta.Select(quietRows, 1, false);
+        long quietBefore=GC.GetAllocatedBytesForCurrentThread();
+        for(int i=0;i<10000;i++)quietDelta.Select(quietRows, 1, false);
+        long quietBytes=GC.GetAllocatedBytesForCurrentThread()-quietBefore;
+        Check(quietBytes==0, "unchanged delta selections allocate no lists or packet snapshots (allocated bytes: "+quietBytes+")");
+        for(int i=0;i<10000;i++)quietDelta.Commit(quietRows, 1);
+        long commitBefore=GC.GetAllocatedBytesForCurrentThread();
+        for(int i=0;i<10000;i++)quietDelta.Commit(quietRows, 1);
+        Check(GC.GetAllocatedBytesForCurrentThread()-commitBefore==0,
+            "repeated acknowledgements reuse compact state without allocating new records");
+        bool retained=true; var retiredDelta=new SharingDelta { Retained=_=>retained };
+        retiredDelta.Commit(quietRows, 0); retiredDelta.Prioritize(quietRows[0]);
+        retained=false; retiredDelta.Forget(quietRows[0].id); retiredDelta.Commit(quietRows, 1);
+        Check(((System.Collections.IDictionary)sentField.GetValue(retiredDelta)).Count==0 &&
+            ((System.Collections.IDictionary)urgentField.GetValue(retiredDelta)).Count==0,
+            "retirement releases static cache and late acknowledgement cannot restore it");
+        var quietNetwork=new Network(2); quietNetwork.Run(2);
+        quietNetwork.Clients[0].Context();
+        for(int i=0;i<10000;i++)quietNetwork.Clients[0].Sharing.Tick();
+        long schedulerBefore=GC.GetAllocatedBytesForCurrentThread();
+        for(int i=0;i<10000;i++)quietNetwork.Clients[0].Sharing.Tick();
+        Check(GC.GetAllocatedBytesForCurrentThread()-schedulerBefore==0,
+            "idle sharing scheduler allocates no announcements, world strings or empty packets between timed work");
+        var retiringNetwork=new Network(2); retiringNetwork.Clients[0].Host.Tracking.Static.Add(Record(5)); retiringNetwork.Run(2);
+        var peersField=typeof(MarkerSharing).GetField("peers",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance);
+        var retiringPeer=((Dictionary<long,SharingPeer>)peersField.GetValue(retiringNetwork.Clients[0].Sharing))[2];
+        Check(((System.Collections.IDictionary)sentField.GetValue(retiringPeer.Static)).Count==1,
+            "static transport retains an acknowledged entry before deletion");
+        retiringNetwork.Clients[0].Host.Tracking.Static.Clear(); retiringNetwork.Clients[0].Sharing.ForgetDiscovery("123:5");
+        Check(((System.Collections.IDictionary)sentField.GetValue(retiringPeer.Static)).Count==0,
+            "discovery deletion releases each peer's compact cache without scanning the archive");
+        var sweepRows=Enumerable.Range(0,512).Select(Record).ToList();int prepared=0;
+        var sweepDelta=new SharingDelta { Prepare=_=>prepared++ };sweepDelta.Commit(sweepRows,0);
+        for(int i=0;i<4;i++)Check(sweepDelta.Select(sweepRows,1,false).Count==0,"unchanged archive sweep page "+i+" remains empty");
+        Check(prepared==512,"empty work cooldown begins only after examining the complete source");
+        sweepRows[0].portalTag="changed while idle";
+        for(int i=0;i<100;i++)sweepDelta.Select(sweepRows,1.05f,false);
+        Check(prepared==512,"unchanged full sweeps avoid rescanning the archive on every render frame");
+        Check(sweepDelta.Select(sweepRows,1.1001f,false).Any(r=>r.id==sweepRows[0].id),
+            "ordinary changes resume after at most the 100-millisecond empty-sweep pause");
+        sweepDelta.Commit(sweepRows,2);for(int i=0;i<4;i++)sweepDelta.Select(sweepRows,3,false);
+        sweepRows[1].completed=true;sweepRows[1].completionRevision=1;sweepDelta.Prioritize(sweepRows[1]);
+        Check(sweepDelta.Select(sweepRows,3.001f,false).Any(r=>r.id==sweepRows[1].id&&r.completed),
+            "manual dungeon progress immediately bypasses the empty-sweep pause");
+        var fillingRows=Enumerable.Range(0,1000).Select(Record).ToArray();var fillingDelta=new SharingDelta();
+        fillingDelta.Commit(fillingRows.Take(256).ToArray(),0);var firstSyncIds=new HashSet<string>();
+        for(int i=0;i<200;i++) {var batch=fillingDelta.Select(fillingRows,1,false);foreach(var r in batch)firstSyncIds.Add(r.id);fillingDelta.Commit(batch,1);}
+        Check(firstSyncIds.Count==744,"unchanged leading pages never stall the remaining initial archive transfer");
+        var growingRows=new List<MarkerRecord>{Record(1)};var growingDelta=new SharingDelta();growingDelta.Commit(growingRows,0);
+        growingDelta.Select(growingRows,1,false);growingRows.Add(Record(2));
+        Check(growingDelta.Select(growingRows,1.001f,false).Any(r=>r.id=="123:2"),
+            "new discoveries changing source membership immediately bypass an idle pause");
         System.Console.WriteLine("Sharing transport checks passed: "+passed);
     }
 }

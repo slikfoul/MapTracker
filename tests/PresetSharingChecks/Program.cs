@@ -16,15 +16,16 @@ static class Checks
         internal Client(long id){Id=Net.Id=Rpc.Id=id;Share=new(Host);}
         internal void Context(){ZNet.instance=Net;ZRoutedRpc.instance=Rpc;Player.m_localPlayer=new();}
     }
-    sealed class Sent {internal long From,To;internal string Method,Json;internal float At;internal int Bytes;}
+    sealed class Sent {internal long From,To;internal string Method,Json;internal float At,Due;internal int Bytes;}
     sealed class Network
     {
         internal Client A=new(1),B=new(2);internal List<Sent> Sent=new();internal Queue<Sent> Queue=new();internal float Now;
+        internal Func<Sent,float> Delay=_=>0;
         internal Network()
         {
             foreach(var client in new[]{A,B}){
                 client.Net.Players=new(){new(){m_name="Alice",m_characterID=new(){UserID=1}},new(){m_name="Bob",m_characterID=new(){UserID=2}}};
-                client.Rpc.Send=(from,to,method,json)=>{var s=new Sent{From=from,To=to,Method=method,Json=json,At=Now,Bytes=Encoding.UTF8.GetByteCount(json)+128};Sent.Add(s);Queue.Enqueue(s);};
+                client.Rpc.Send=(from,to,method,json)=>{var s=new Sent{From=from,To=to,Method=method,Json=json,At=Now,Bytes=Encoding.UTF8.GetByteCount(json)+128};s.Due=Now+Delay(s);Sent.Add(s);Queue.Enqueue(s);};
             }
             Run(0.1f);
         }
@@ -33,7 +34,7 @@ static class Checks
             float end=Now+seconds;
             for(;Now<end;Now+=0.05f){UnityEngine.Time.realtimeSinceStartup=Now;
                 foreach(var client in new[]{A,B}){client.Context();client.Share.Tick();}
-                while(Queue.TryDequeue(out var s)){var target=s.To==1?A:s.To==2?B:null;
+                for(int count=Queue.Count;count>0;count--){var s=Queue.Dequeue();if(s.Due>Now){Queue.Enqueue(s);continue;}var target=s.To==1?A:s.To==2?B:null;
                     if(target==null)continue;target.Context();if(target.Rpc.Handlers.TryGetValue(s.Method,out var handler))handler(s.From,s.Json);}
             }
         }
@@ -156,6 +157,61 @@ static class Checks
             "installed clients blocking offers get their own unavailable reason without an acceptance popup");
         absent.A.Context();absent.A.Net.Players.RemoveAll(p=>p.m_characterID.UserID==2);absent.A.Share.CheckRecipients();
         Check(absent.A.Share.Recipients().Count==0&&!absent.A.Share.Send(2,Sample()),"disconnected recipients and their cached capabilities are removed");
+        var recheck=new Network();recheck.A.Context();recheck.A.Share.CheckRecipients();recheck.Run(31);recheck.A.Context();
+        Check(recheck.A.Share.Recipients().Single().CanShare,"confirmed recipient is available before explicit revalidation");
+        recheck.B.Host.BlockPresetOffers.Value=true;recheck.A.Share.CheckRecipients(true);
+        Check(recheck.A.Share.Recipients().Single().CanShare,"opening a fresh check preserves the last confirmed readiness without gray flicker");
+        recheck.Run(2);recheck.A.Context();
+        Check(recheck.A.Share.Recipients().Single().State==PresetSharing.Availability.NotAccepting,
+            "fresh blocked-offer response replaces cached readiness");
+        recheck.Run(31);recheck.A.Context();recheck.B.Host.BlockPresetOffers.Value=false;recheck.A.Share.CheckRecipients(true);
+        Check(recheck.A.Share.Recipients().Single().State==PresetSharing.Availability.NotAccepting,
+            "rechecking a confirmed blocked peer keeps it blocked while the response is pending");
+        recheck.Run(2);recheck.A.Context();Check(recheck.A.Share.Recipients().Single().CanShare,
+            "fresh accepting response enables a previously blocked peer");
+        recheck.Run(31);recheck.B.Rpc.Handlers.Clear();recheck.A.Context();recheck.A.Share.CheckRecipients(true);
+        recheck.Run(4);recheck.A.Context();Check(recheck.A.Share.Recipients().Single().CanShare,
+            "confirmed readiness remains stable before an actual sent-probe timeout");
+        recheck.Run(2);recheck.A.Context();Check(recheck.A.Share.Recipients().Single().State==PresetSharing.Availability.Unavailable,
+            "a sent refresh that receives no response eventually removes stale readiness");
+        recheck.Run(31);recheck.A.Context();recheck.A.Share.CheckRecipients(true);
+        Check(!recheck.A.Share.Recipients().Single().CanShare,
+            "retrying after a failed refresh does not optimistically restore an obsolete positive answer");
+        var congestedCheck=new Network();congestedCheck.A.Context();congestedCheck.A.Share.CheckRecipients();congestedCheck.Run(31);
+        congestedCheck.A.Context();congestedCheck.A.Net.Peers[0].m_socket.Queue=5000;congestedCheck.A.Share.CheckRecipients(true);
+        congestedCheck.Run(40);congestedCheck.A.Context();congestedCheck.A.Share.CheckRecipients(true);
+        Check(congestedCheck.A.Share.Recipients().Single().CanShare&&congestedCheck.Sent.Count==2,
+            "a refresh queued behind native traffic neither times out early nor sends replacement probes");
+        congestedCheck.A.Net.Peers[0].m_socket.Queue=0;congestedCheck.Run(2);congestedCheck.A.Context();
+        Check(congestedCheck.A.Share.Recipients().Single().CanShare&&congestedCheck.Sent.Count==4,
+            "one queued revalidation succeeds after congestion clears");
+        var jitterCheck=new Network();jitterCheck.Delay=s=>jitterCheck.Sent.Count<2?2:0;
+        jitterCheck.A.Context();jitterCheck.A.Share.CheckRecipients();jitterCheck.Run(30.3f);jitterCheck.A.Context();
+        Check(jitterCheck.A.Share.Recipients().Single().CanShare,"delayed initial probe is confirmed within its timeout");
+        jitterCheck.A.Share.CheckRecipients(true);jitterCheck.Run(1);jitterCheck.A.Context();
+        Check(jitterCheck.Sent.Count==2&&jitterCheck.A.Share.Recipients().Single().CanShare,
+            "recheck cooldown starts at the confirmed reply and respects older peers' receive-based reply limit");
+        jitterCheck.Run(4);jitterCheck.A.Context();jitterCheck.A.Share.CheckRecipients(true);jitterCheck.Run(2);jitterCheck.A.Context();
+        Check(jitterCheck.A.Share.Recipients().Single().CanShare&&jitterCheck.Sent.Count==4,
+            "delivery-time jitter near the recheck interval cannot silently suppress a valid refresh response");
+        var reconnect=new Network();reconnect.A.Context();reconnect.A.Share.CheckRecipients();reconnect.Run(2);reconnect.A.Context();
+        var savedPeer=reconnect.A.Net.Players.Single(p=>p.m_characterID.UserID==2);
+        reconnect.A.Net.Players.RemoveAll(p=>p.m_characterID.UserID==2);reconnect.Run(1);reconnect.B.Share.Reset();
+        reconnect.A.Net.Players.Add(savedPeer);reconnect.A.Context();
+        Check(!reconnect.A.Share.Recipients().Single().CanShare&&!reconnect.A.Share.Send(2,Sample()),
+            "an observed disconnect invalidates readiness even while the recipient picker is closed");
+        reconnect.A.Share.CheckRecipients();reconnect.Run(6);reconnect.A.Context();
+        Check(reconnect.A.Share.Recipients().Single().CanShare,
+            "a returning peer is enabled only after a fresh capability answer");
+        reconnect.A.Net.World=456;reconnect.Run(0.1f);reconnect.A.Context();
+        Check(!reconnect.A.Share.Recipients().Single().CanShare,
+            "world changes clear confirmed recipient readiness");
+        var unsupported=new Network();unsupported.B.Rpc.Handlers.Clear();unsupported.A.Context();unsupported.A.Share.CheckRecipients();unsupported.Run(0.2f);
+        var unsupportedProbe=DataJson.Read<PresetMessage>(unsupported.Sent.Single().Json);
+        unsupported.A.Context();unsupported.A.Rpc.Handlers["MapTracker.Presets.v1"](2,DataJson.Write(new PresetMessage{
+            world="123",kind="capability",id=unsupportedProbe.id,features=7}));unsupported.Run(6);unsupported.A.Context();
+        Check(!unsupported.A.Share.Recipients().Single().CanShare&&unsupported.A.Share.Recipients().Single().State==PresetSharing.Availability.Unavailable,
+            "unsupported capability flags never optimistically enable a recipient");
         Directory.Delete(BepInEx.Paths.ConfigPath,true);
         System.Console.WriteLine($"Passed {passed} preset-sharing checks. Game rendering and live multiplayer are not simulated.");
     }

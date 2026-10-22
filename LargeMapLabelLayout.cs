@@ -10,7 +10,14 @@ namespace MapTracker
     {
         private readonly List<LabelBox> boxes = new List<LabelBox>();
         private readonly List<LabelBox> alternatives = new List<LabelBox>();
-        private readonly List<MarkerRecord> candidates = new List<MarkerRecord>();
+        private struct Candidate
+        {
+            internal MarkerRecord Record;
+            internal bool Target, Portal;
+            internal float Distance;
+            internal string Id;
+        }
+        private readonly List<Candidate> candidates = new List<Candidate>();
         private readonly LabelLayout.TwoAnchorSelection selection = new LabelLayout.TwoAnchorSelection();
         private readonly ConditionalWeakTable<TMP_Text, Measure> measurements = new ConditionalWeakTable<TMP_Text, Measure>();
         private sealed class Measure { internal string Name; internal float FontSize; internal Vector2 Size; }
@@ -29,18 +36,18 @@ namespace MapTracker
                 if (!r.nameGroupFollower && r.pin?.m_uiElement != null && r.pin.m_uiElement.gameObject.activeInHierarchy &&
                 r.pin.m_NamePinData?.PinNameText != null && r.pin.m_NamePinData.PinNameGameObject != null &&
                 RectTransformUtility.RectangleContainsScreenPoint(map.m_mapImageLarge.rectTransform,
-                    RectTransformUtility.WorldToScreenPoint(camera, r.pin.m_uiElement.position), camera)) candidates.Add(r);
+                    RectTransformUtility.WorldToScreenPoint(camera, r.pin.m_uiElement.position), camera))
+                    candidates.Add(new Candidate { Record = r, Target = host.Tracking.Discoveries.IsNavigationTarget(r),
+                        Portal = r.entry.category == "Portals", Distance = Tracking.NearbyNameDistance(r, origin), Id = r.id });
             }
             // Portals get a persistent caption at close zoom, before ordinary crowd labels.
             // Navigation targets retain their existing priority.
-            candidates.Sort((a, b) => NameOrder(host.Tracking.Discoveries.IsNavigationTarget(a), a.entry.category == "Portals",
-                Tracking.NearbyNameDistance(a, origin), a.id, host.Tracking.Discoveries.IsNavigationTarget(b), b.entry.category == "Portals",
-                Tracking.NearbyNameDistance(b, origin), b.id));
+            candidates.Sort((a, b) => NameOrder(a.Target, a.Portal, a.Distance, a.Id, b.Target, b.Portal, b.Distance, b.Id));
             boxes.Clear(); alternatives.Clear();
             var viewport = MarkerPresentation.MapArea(map.m_mapImageLarge.rectTransform, camera);
             for (int i = 0; i < candidates.Count; i++)
             {
-                var record = candidates[i];
+                var record = candidates[i].Record;
                 record.pin.m_NamePinData.PinNameRectTransform.anchoredPosition = record.pin.m_uiElement.anchoredPosition;
                 TMP_Text text = record.pin.m_NamePinData.PinNameText;
                 bool styleChanged = NameTextStyle.Apply(text, record.entry.creature ? host.CreatureNameSize.Value : host.ObjectNameSize.Value);
@@ -71,7 +78,7 @@ namespace MapTracker
             int[] shown = selection.Choose(boxes, alternatives, viewport, MarkerPresentation.PlayerArea(map, true, camera, scale), 4 * scale);
             for (int i = 0; i < candidates.Count; i++)
             {
-                var record = candidates[i]; record.largeNameShown = shown[i] >= 0;
+                var record = candidates[i].Record; record.largeNameShown = shown[i] >= 0;
                 if (!record.largeNameShown) continue;
                 var chosen = shown[i] == 0 ? boxes[i] : alternatives[i];
                 var text = record.pin.m_NamePinData.PinNameText;

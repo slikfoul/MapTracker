@@ -5,6 +5,9 @@ namespace MapTracker
 {
     internal static class CatalogContent
     {
+        // Transient sound/visual/projectile definitions are catalog metadata,
+        // never persistent discoveries or outbound discovery records.
+        internal static bool CanTrack(CatalogEntry entry) => entry != null && !entry.technical;
         internal static bool IsServiceDefinition(CatalogEntry entry)
         {
             if (entry == null || entry.creature || entry.dungeon ||

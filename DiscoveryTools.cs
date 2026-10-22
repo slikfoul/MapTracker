@@ -37,6 +37,7 @@ namespace MapTracker
         private readonly NavigationHud sharedNavigationHud = new NavigationHud();
         private readonly NavigationHud creatureSearchHud = new NavigationHud();
         private readonly CreatureSearch creatureSearch = new CreatureSearch();
+        private readonly DiscoverySearch discoverySearch = new DiscoverySearch();
         private float nextCreatureSearch;
         private readonly NavigationTargets targets = new NavigationTargets();
         private MarkerRecord target { get => targets.Personal; set => targets.Personal = value; }
@@ -57,8 +58,15 @@ namespace MapTracker
         private readonly DiscoveryNotificationFeed notifications = new DiscoveryNotificationFeed();
         private readonly DiscoveryNotificationHud notificationHud = new DiscoveryNotificationHud();
         internal DiscoveryTools(Tracking owner, Plugin plugin) { tracking = owner; host = plugin; }
-        internal List<MarkerRecord> Search(string term, bool favorites) => DiscoveryQuery.Search(tracking.Records, term, favorites,
-            Player.m_localPlayer != null ? Player.m_localPlayer.transform.position : Vector3.zero, tracking.Name);
+        internal bool SearchPending => discoverySearch.Pending;
+        internal List<MarkerRecord> SearchResults => discoverySearch.Results;
+        internal void BeginSearch(string term, bool favorites)
+        {
+            Vector3 origin = Player.m_localPlayer != null ? Player.m_localPlayer.transform.position : Vector3.zero;
+            discoverySearch.Begin(tracking.Records, term, favorites, origin.x, origin.z, tracking.Name, tracking.Contains);
+        }
+        internal void AdvanceSearch() => discoverySearch.Advance(maximumItems: 8192);
+        internal void CancelSearch() => discoverySearch.Cancel();
         internal void Favorite(MarkerRecord record) { record.favorite = !record.favorite; tracking.DiscoveryChanged(record); }
         internal void Select(MarkerRecord record) { RemoveWaypoint(); pointTarget = playerTarget = false; target = record; tracking.SettingsChanged(); }
         internal void ClearTarget() { RemoveWaypoint(); target = null; pointTarget = playerTarget = false; playerTargetId = default; tracking.SettingsChanged(); }
@@ -255,6 +263,6 @@ namespace MapTracker
             HarmonyLib.AccessTools.Method(typeof(Minimap), "CenterMap").Invoke(map, new object[] { record.position });
             tracking.RequestPinRefresh();
         }
-        internal void Reset() { RemoveWaypoint(); RemoveSharedWaypoint(); targets.ClearShared(); sharedObject = null; sharedObjectId = sharedObjectType = null; target = null; creatureSearch.Reset(); nextCreatureSearch = 0; pointTarget = playerTarget = false; playerTargetId = default; publicPlayers.Clear(); notifications.Clear(); notificationHud.Dispose(); navigation.Dispose(); navigationHud.Dispose(); sharedNavigation.Dispose(); sharedNavigationHud.Dispose(); creatureSearchHud.Dispose(); }
+        internal void Reset() { discoverySearch.Reset(); RemoveWaypoint(); RemoveSharedWaypoint(); targets.ClearShared(); sharedObject = null; sharedObjectId = sharedObjectType = null; target = null; creatureSearch.Reset(); nextCreatureSearch = 0; pointTarget = playerTarget = false; playerTargetId = default; publicPlayers.Clear(); notifications.Clear(); notificationHud.Dispose(); navigation.Dispose(); navigationHud.Dispose(); sharedNavigation.Dispose(); sharedNavigationHud.Dispose(); creatureSearchHud.Dispose(); }
     }
 }

@@ -72,6 +72,7 @@ namespace MapTracker
         internal readonly Dictionary<int, CatalogEntry> Locations = new Dictionary<int, CatalogEntry>();
         private readonly Dictionary<string, CatalogEntry> liveTypes = new Dictionary<string, CatalogEntry>();
         private readonly Dictionary<string, CatalogEntry> cachedTypes = new Dictionary<string, CatalogEntry>();
+        private readonly List<CatalogEntry> ignoredTechnical = new List<CatalogEntry>();
         internal bool Ready { get; private set; }
         internal int Processed, Total;
         internal string Status = "Waiting for game registries";
@@ -80,6 +81,9 @@ namespace MapTracker
         private readonly List<string> warnings = new List<string>();
         private ZNetScene scene;
         private Coroutine scan;
+        private readonly CatalogPersistence persistence = new CatalogPersistence();
+        private readonly Queue<IEnumerator<byte>> pendingExports = new Queue<IEnumerator<byte>>();
+        private IEnumerator<byte> exportPreparation;
         private readonly ConfigEntry<int> keepDefaultsRevision;
         private readonly ConfigEntry<int> plantKeepRevision;
         internal Catalog(Plugin plugin)
@@ -95,17 +99,22 @@ namespace MapTracker
 
         internal void Tick()
         {
+            var exportError = persistence.TakeError();
+            if (exportError != null) host.Report("Catalog export failed", exportError);
+            AdvanceExport();
             if (ZNetScene.instance == null || ObjectDB.instance == null || ZoneSystem.instance == null) return;
             if (scene == ZNetScene.instance) return;
             if (scan != null) host.StopCoroutine(scan);
             scene = ZNetScene.instance;
             Ready = false;
-            Entries.Clear(); Prefabs.Clear(); Locations.Clear(); warnings.Clear(); liveTypes.Clear(); cachedTypes.Clear();
+            Entries.Clear(); Prefabs.Clear(); Locations.Clear(); warnings.Clear(); liveTypes.Clear(); cachedTypes.Clear(); ignoredTechnical.Clear();
             try
             {
                 if (File.Exists(ExportPath))
                 {
-                    var cached = DataJson.Read<CatalogDocument>(File.ReadAllText(ExportPath, Encoding.UTF8));
+                    CatalogDocument cached;
+                    using (var input = new StreamReader(ExportPath, Encoding.UTF8))
+                        cached = DataJson.ReadFrom<CatalogDocument>(input);
                     if (cached?.schema == 1 && cached.entries != null)
                         foreach (var entry in cached.entries)
                             if (entry != null && !string.IsNullOrEmpty(entry.key) && !CatalogContent.IsServiceDefinition(entry)) cachedTypes[entry.key] = entry;
@@ -119,9 +128,34 @@ namespace MapTracker
         {
             // Let other plugins finish registering their prefabs before taking a snapshot.
             yield return null; yield return null;
-            var definitions = current.m_prefabs.Concat(current.m_nonNetViewPrefabs).Concat(ObjectDB.instance.m_items)
-                .Where(p => p != null).GroupBy(p => p.name).Select(g => g.First()).ToList();
-            var locations = world.m_locations.Where(l => l.m_enable && l.m_prefab.IsValid).ToList();
+            // Capture references while the registries are stable within this frame;
+            // defer name reads and deduplication instead of grouping every prefab at once.
+            var prefabs = current.m_prefabs.ToArray();
+            var nonNetworkPrefabs = current.m_nonNetViewPrefabs.ToArray();
+            var items = ObjectDB.instance.m_items.ToArray();
+            var locationSnapshot = world.m_locations.ToArray();
+            var definitions = new List<GameObject>(prefabs.Length + nonNetworkPrefabs.Length + items.Length);
+            var locations = new List<ZoneSystem.ZoneLocation>(locationSnapshot.Length);
+            using (var preparation = CatalogPreparation.CollectDistinct(prefabs.Concat(nonNetworkPrefabs).Concat(items),
+                definitions, p => p != null, p => p.name).GetEnumerator())
+            {
+                IEnumerator<byte> work = preparation;
+                while (!FrameWork.Advance(ref work, host.ScanBudget.Value))
+                {
+                    if (current != ZNetScene.instance) yield break;
+                    yield return null;
+                }
+            }
+            using (var preparation = CatalogPreparation.Collect(locationSnapshot, locations,
+                l => l.m_enable && l.m_prefab.IsValid).GetEnumerator())
+            {
+                IEnumerator<byte> work = preparation;
+                while (!FrameWork.Advance(ref work, host.ScanBudget.Value))
+                {
+                    if (current != ZNetScene.instance) yield break;
+                    yield return null;
+                }
+            }
             Processed = 0; Total = definitions.Count + locations.Count;
             long frameStart = System.Diagnostics.Stopwatch.GetTimestamp();
             foreach (GameObject prefab in definitions)
@@ -160,9 +194,15 @@ namespace MapTracker
                 Processed++;
                 yield return null;
             }
-            if (host.PresetRevision.Value == 0) ApplyMinimalPreset();
-            keepDefaultsRevision.Value = 1;
-            plantKeepRevision.Value = 1;
+            bool autosave = host.Config.SaveOnConfigSet;
+            host.Config.SaveOnConfigSet = false;
+            try
+            {
+                if (host.PresetRevision.Value == 0) ApplyMinimalPreset(false);
+                keepDefaultsRevision.Value = 1;
+                plantKeepRevision.Value = 1;
+            }
+            finally { host.Config.SaveOnConfigSet = autosave; }
             Ready = true; Status = "Ready"; scan = null;
             host.Config.Save();
             Export();
@@ -171,6 +211,12 @@ namespace MapTracker
         private void Add(CatalogEntry entry, Dictionary<int, CatalogEntry> index, GameObject prefab = null)
         {
             if (CatalogContent.IsServiceDefinition(entry)) return;
+            if (!CatalogContent.CanTrack(entry))
+            {
+                // Keep classification metadata for diagnostics/migration, but do
+                // not register runtime detection or thousands of unused settings.
+                ignoredTechnical.Add(entry); liveTypes[entry.key] = entry; return;
+            }
             BindSettings(entry);
             if (!entry.creature && entry.Icon == null) entry.Icon = ObjectIconResolver.Resolve(entry, prefab);
             Entries.Add(entry); index[entry.prefab.GetStableHashCode()] = entry; liveTypes[entry.key] = entry;
@@ -178,8 +224,9 @@ namespace MapTracker
         internal CatalogEntry GetSavedDefinition(string key)
         {
             if (string.IsNullOrEmpty(key)) return null;
-            if (liveTypes.TryGetValue(key, out var live)) return live;
+            if (liveTypes.TryGetValue(key, out var live)) return CatalogContent.CanTrack(live) ? live : null;
             if (Ready || !cachedTypes.TryGetValue(key, out var cached)) return null;
+            if (!CatalogContent.CanTrack(cached)) return null;
             if (cached.Selected == null)
             {
                 BindSettings(cached);
@@ -225,7 +272,7 @@ namespace MapTracker
             else if (entry?.key == "location:AshlandRuins" && entry.prefab == "AshlandRuins")
             { entry.category = "Locations"; entry.dungeon = false; }
         }
-        internal void ApplyMinimalPreset()
+        internal void ApplyMinimalPreset(bool save = true)
         {
             bool autosave = host.Config.SaveOnConfigSet; host.Config.SaveOnConfigSet = false;
             try
@@ -240,13 +287,12 @@ namespace MapTracker
                 host.PresetRevision.Value = 1;
             }
             finally { host.Config.SaveOnConfigSet = autosave; }
-            host.Config.Save();
+            if (save) host.Config.Save();
         }
         internal CatalogEntry GetLegacyDungeon(string name)
         {
             string key = "legacy:" + name;
-            var entry = Entries.FirstOrDefault(e => e.key == key);
-            if (entry != null) return entry;
+            if (liveTypes.TryGetValue(key, out var entry)) return entry;
             entry = new CatalogEntry { key = key, prefab = name, name = name, category = "Dungeons", dungeon = true,
                 source = "AutoMapPins saved map pin", products = new string[0], components = new string[0] };
             Add(entry, new Dictionary<int, CatalogEntry>());
@@ -351,17 +397,26 @@ namespace MapTracker
             if (!Ready) { host.Report("Catalog is still being collected; export deferred until complete."); return; }
             try
             {
-                var doc = new CatalogDocument { modVersion = Plugin.Version, gameVersion = global::Version.GetVersionString(),
-                    generatedUtc = DateTime.UtcNow.ToString("o"), entries = Entries, warnings = warnings };
-                Directory.CreateDirectory(Path.GetDirectoryName(ExportPath));
-                string temp = ExportPath + ".tmp";
-                string json = DataJson.Write(doc, true);
-                if (json.IndexOf("\"entries\"", StringComparison.Ordinal) < 0) throw new InvalidOperationException("Serializer omitted the catalog entries.");
-                File.WriteAllText(temp, json, new UTF8Encoding(false));
-                if (File.Exists(ExportPath)) File.Replace(temp, ExportPath, ExportPath + ".bak");
-                else File.Move(temp, ExportPath);
+                // Definitions are immutable after registration. Keep their references
+                // across world changes, then detach arrays and runtime fields in slices.
+                var entries = Entries.ToArray();
+                var technical = ignoredTechnical.ToArray();
+                string destination = ExportPath;
+                pendingExports.Enqueue(CatalogPersistence.Prepare(entries.Concat(technical), warnings,
+                    Plugin.Version, global::Version.GetVersionString(), snapshot => persistence.Enqueue(destination, snapshot)).GetEnumerator());
             }
             catch (Exception e) { host.Report("Catalog export failed", e); }
+        }
+        private void AdvanceExport()
+        {
+            if (exportPreparation == null && pendingExports.Count > 0) exportPreparation = pendingExports.Dequeue();
+            if (exportPreparation == null) return;
+            try { FrameWork.Advance(ref exportPreparation, host.ScanBudget.Value); }
+            catch (Exception e)
+            {
+                exportPreparation?.Dispose(); exportPreparation = null;
+                host.Report("Catalog export preparation failed", e);
+            }
         }
     }
 }

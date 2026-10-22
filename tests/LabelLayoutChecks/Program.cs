@@ -111,6 +111,32 @@ Check(!CreatureDisplay.ShowHead(false, 1, 0.01f, 0.01f, 0.5f, false) &&
     "dot mode overrides close-range and close-zoom icons on both maps");
 
 var random = new Random(7351);
+Check(LabelLayout.Choose(new[] { new LabelBox(-128, -128, 128, 16), new LabelBox(0, -128, 128, 16) }, 0)
+    .SequenceEqual(new[] { true, true }), "labels touching exactly at a spatial-cell boundary do not overlap");
+Check(LabelLayout.Choose(new[] { new LabelBox(0, 0, 1e-30f, 1e-30f), new LabelBox(0, 0, 1e-30f, 1e-30f) }, 0)
+    .SequenceEqual(new[] { true, true }), "boolean collision fast path retains the prior floating-point area semantics");
+for (int trial = 0; trial < 60; trial++)
+{
+    float gap = trial % 7;
+    var inputs = Enumerable.Range(0, 200).Select(_ => new LabelBox(
+        random.Next(-1024, 1024) / 3f, random.Next(-640, 640) / 3f, random.Next(0, 700), random.Next(0, 80))).ToArray();
+    var expected = new bool[inputs.Length];
+    var kept = new List<LabelBox>();
+    for (int i = 0; i < inputs.Length; i++)
+    {
+        var candidate = inputs[i]; float area = 0;
+        foreach (var other in kept)
+        {
+            float x = Math.Min(candidate.X + candidate.Width + gap, other.X + other.Width + gap) - Math.Max(candidate.X, other.X);
+            float y = Math.Min(candidate.Y + candidate.Height + gap, other.Y + other.Height + gap) - Math.Max(candidate.Y, other.Y);
+            if (x > 0 && y > 0) area += x * y;
+        }
+        expected[i] = area == 0;
+        if (expected[i]) kept.Add(candidate);
+    }
+    Check(LabelLayout.Choose(inputs, gap).SequenceEqual(expected),
+        "early collision exit matches full summed-area selection with fractional and cross-cell bounds " + trial);
+}
 for (int trial = 0; trial < 60; trial++)
 {
     float gap = trial % 6;

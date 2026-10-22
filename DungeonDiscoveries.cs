@@ -107,12 +107,16 @@ namespace MapTracker
 
         internal static MarkerRecord Rebind(IDictionary<string, MarkerRecord> records, string id,
             CatalogEntry entry, Vector3 position, Action<MarkerRecord> removePin)
+            => RebindTracked(records, id, entry, position, removePin, null);
+        internal static MarkerRecord RebindTracked(IDictionary<string, MarkerRecord> records, string id,
+            CatalogEntry entry, Vector3 position, Action<MarkerRecord> removePin, Action<string> identityRetired)
         {
             var record = records.Values.FirstOrDefault(r => Eligible(r) && SameEntrance(r, entry.key, position, false));
             if (record == null) return null;
             if (record.type != entry.key) removePin(record);
             string previousId = record.id;
             records.Remove(previousId);
+            identityRetired?.Invoke(previousId);
             record.id = id; record.type = entry.key; record.entry = entry; record.position = position;
             RememberAlias(record, previousId);
             record.imported = false;
@@ -126,17 +130,56 @@ namespace MapTracker
             foreach (var step in RemoveDuplicatesIncrementally(records, removePin, () => changed = true)) { }
             return changed;
         }
+        private struct PreparationEntry
+        {
+            internal MarkerRecord Record;
+            internal bool Live, Origin, Legacy, Imported;
+            internal string Id;
+        }
+        private static int ComparePreparation(PreparationEntry first, PreparationEntry second)
+        {
+            int result = second.Live.CompareTo(first.Live);
+            if (result == 0) result = second.Origin.CompareTo(first.Origin);
+            if (result == 0) result = first.Legacy.CompareTo(second.Legacy);
+            if (result == 0) result = first.Imported.CompareTo(second.Imported);
+            return result == 0 ? StringComparer.Ordinal.Compare(first.Id, second.Id) : result;
+        }
         internal static IEnumerable<byte> RemoveDuplicatesIncrementally(IDictionary<string, MarkerRecord> records,
             Action<MarkerRecord> removePin, Action changed)
         {
-            var entrances = records.Values.Where(Eligible)
-                .OrderByDescending(r => r.live).ThenByDescending(r => r.dungeonOrigin.HasValue).ThenBy(Legacy).ThenBy(r => r.imported)
-                .ThenBy(r => r.id, StringComparer.Ordinal).ToList();
-            var retained = new List<MarkerRecord>();
-            foreach (var record in entrances)
+            var candidates = new List<MarkerRecord>();
+            foreach (var record in records.Values.ToArray())
             {
+                if (Eligible(record)) candidates.Add(record);
+                yield return 0;
+            }
+            // Freeze priority keys so live observations between frames cannot
+            // change the comparator during an incremental stable sort.
+            var entrances = new PreparationEntry[candidates.Count];
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                var record = candidates[i];
+                entrances[i] = new PreparationEntry { Record = record, Live = record.live,
+                    Origin = record.dungeonOrigin.HasValue, Legacy = Legacy(record), Imported = record.imported, Id = record.id };
+                yield return 0;
+            }
+            foreach (var step in FrameWork.StableSort(entrances, entrances.Length, ComparePreparation)) yield return step;
+            var retained = new List<MarkerRecord>();
+            foreach (var entrance in entrances)
+            {
+                var record = entrance.Record;
                 if (!MarkerLifetime.Current(records, record)) { yield return 0; continue; }
-                var survivor = retained.FirstOrDefault(r => MarkerLifetime.Current(records, r) && SameEntrance(r, record.type, record.position, Legacy(record), record.dungeonOrigin));
+                MarkerRecord survivor = null;
+                int comparisons = 0;
+                foreach (var candidate in retained)
+                {
+                    if (!MarkerLifetime.Current(records, record)) break;
+                    if (MarkerLifetime.Current(records, candidate) &&
+                        SameEntrance(candidate, record.type, record.position, Legacy(record), record.dungeonOrigin))
+                    { survivor = candidate; break; }
+                    if (++comparisons == 64) { comparisons = 0; yield return 0; }
+                }
+                if (!MarkerLifetime.Current(records, record)) { yield return 0; continue; }
                 if (survivor == null) { retained.Add(record); yield return 0; continue; }
                 Merge(survivor, record);
                 MarkerLifetime.Forget(records, record, removePin); changed();

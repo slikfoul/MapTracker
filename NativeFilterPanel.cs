@@ -433,6 +433,7 @@ namespace MapTracker
         { rect.anchorMin = rect.anchorMax = rect.pivot = anchor; rect.anchoredPosition = position; rect.sizeDelta = size; }
         internal void Dispose()
         {
+            window?.Host?.Tracking?.Discoveries.CancelSearch();
             DisposePresetProgress();
             CloseSharing();
             if (root != null) UnityEngine.Object.Destroy(root);

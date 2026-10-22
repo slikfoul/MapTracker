@@ -1,4 +1,8 @@
-param([string]$Profile = 'Default', [string]$DataRoot = (Join-Path $env:APPDATA 'r2modmanPlus-local\Valheim'))
+param(
+    [string]$Profile = 'Default',
+    [string]$DataRoot = (Join-Path $env:APPDATA 'r2modmanPlus-local\Valheim'),
+    [ValidatePattern('^\d+\.\d+\.\d+$')][string]$RenumberUnpublishedFrom
+)
 $ErrorActionPreference = 'Stop'
 if ($Profile -notmatch '^[A-Za-z0-9 _-]+$') { throw 'Invalid profile name.' }
 function AssertClosed {
@@ -28,7 +32,15 @@ if ($existing.Count) {
     $installed = [regex]::Match($existing[0].Value, '(?m)^  versionNumber:\r?\n    major: (\d+)\r?\n    minor: (\d+)\r?\n    patch: (\d+)')
     if (-not $installed.Success) { throw 'Cannot determine installed version; leave the profile untouched.' }
     $installedVersion = [version]('{0}.{1}.{2}' -f $installed.Groups[1].Value,$installed.Groups[2].Value,$installed.Groups[3].Value)
-    if ($installedVersion -gt [version]$version) { throw 'Refusing to downgrade a newer local version.' }
+    # Explicitly renumbering the current unpublished build is separate from a
+    # normal import. Require the exact expected installed version; keep the
+    # downgrade guard active for every ordinary local installation.
+    if ($RenumberUnpublishedFrom -and ($installedVersion -ne [version]$RenumberUnpublishedFrom -or $installedVersion -le [version]$version)) {
+        throw 'The installed version does not match the explicitly requested unpublished-build renumbering.'
+    }
+    if ($installedVersion -gt [version]$version -and -not $RenumberUnpublishedFrom) { throw 'Refusing to downgrade a newer local version.' }
+} elseif ($RenumberUnpublishedFrom) {
+    throw 'Cannot renumber an unpublished build that is not installed.'
 }
 # Keep manager package links separate from the archive project website.
 $managerWebsite = 'https://thunderstore.io/c/valheim/p/Slikfoul/' + $manifest.name + '/'
@@ -204,7 +216,7 @@ try {
     if ($copies.Count -ne 1) { throw 'Expected exactly one package-managed MapTracker DLL.' }
     if ($originalConfigHash -and (Get-FileHash -LiteralPath $configPath).Hash -cne $originalConfigHash) { throw 'Existing config changed during registration.' }
     if ([Reflection.AssemblyName]::GetAssemblyName($copies[0].FullName).Version.ToString(3) -cne $version) { throw 'Installed DLL version differs from package.' }
-    [ordered]@{ version=$version; profile=$Profile; enabled=$enabled; dll=$copies[0].FullName; dllSha256=(Get-FileHash -LiteralPath $copies[0].FullName).Hash; archiveSha256=(Get-FileHash -LiteralPath $archivePath).Hash; configPreserved=$true; backup=$backupDirectory } |
+    [ordered]@{ version=$version; renumberedFrom=$RenumberUnpublishedFrom; profile=$Profile; enabled=$enabled; dll=$copies[0].FullName; dllSha256=(Get-FileHash -LiteralPath $copies[0].FullName).Hash; archiveSha256=(Get-FileHash -LiteralPath $archivePath).Hash; configPreserved=$true; backup=$backupDirectory } |
         ConvertTo-Json | Set-Content -LiteralPath (Join-Path $PSScriptRoot "artifacts\installation-$version.json") -Encoding utf8
     Write-Output "Registered MapTracker $version as a local mod in $Profile; version, icon, cache and installed files verified."
 }

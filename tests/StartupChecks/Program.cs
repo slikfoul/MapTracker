@@ -41,3 +41,23 @@ FrameWork.Advance(ref work, 2, clock: () => clock += Stopwatch.Frequency);
 Check(operations == 1, "single expensive operation yields immediately rather than batching more work");
 work.Dispose(); work = null;
 Console.WriteLine("Scheduler checks do not measure live Unity frame times.");
+
+var unsorted = Enumerable.Range(0, 18299).Select(i => (key: (i * 7919) % 97, original: i)).ToArray();
+var expected = unsorted.OrderBy(v => v.key).ToArray();
+int comparisons = 0, previousComparisons = 0, sortSteps = 0;
+var sorting = FrameWork.StableSort(unsorted, unsorted.Length, (a, b) => { comparisons++; return a.key.CompareTo(b.key); }).GetEnumerator();
+while (sorting.MoveNext())
+{
+    if (comparisons - previousComparisons > 64) throw new Exception("sort step exceeded its comparison limit");
+    previousComparisons = comparisons; sortSteps++;
+}
+Check(sortSteps > 1 && unsorted.SequenceEqual(expected), "archive sorting yields bounded work and exactly preserves stable ordering");
+var prefix = new[] { 3, 1, 2, 999 };
+foreach (var step in FrameWork.StableSort(prefix, 3, (a, b) => a.CompareTo(b))) { }
+Check(prefix.SequenceEqual(new[] { 1, 2, 3, 999 }), "archive sorting only touches the populated prefix");
+foreach (int size in new[] { 0, 1, 2, 3, 7, 8, 9, 63, 64, 65, 127 })
+{
+    var values = Enumerable.Range(0, size).Reverse().ToArray();
+    foreach (var step in FrameWork.StableSort(values, size, (a, b) => a.CompareTo(b))) { }
+    Check(values.SequenceEqual(Enumerable.Range(0, size)), "stable sort handles edge length " + size);
+}

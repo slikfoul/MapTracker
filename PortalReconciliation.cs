@@ -6,6 +6,10 @@ namespace MapTracker
     // old discovery whose destruction event was missed in an earlier session.
     internal sealed class PortalReconciliation
     {
+        // Saved peer discoveries need the same native-world validation as local
+        // discoveries. Their destruction may have happened while we were away.
+        internal static bool Eligible(MarkerRecord record) => record != null &&
+            !record.dynamic && record.entry?.category == "Portals";
         private sealed class Missing
         {
             internal float first, last;

@@ -67,9 +67,13 @@ namespace MapTracker
         internal int CreatureFlickers, SimulatedOldFlickers;
         private Dictionary<string,float> oldUntil = new();
         internal FakeDiscoveries Discoveries = new();
-        internal List<MarkerRecord> OwnDiscoveries() => new(Static);
+        internal IReadOnlyList<MarkerRecord> OwnDiscoveries() => Static;
+        // Transport fixtures provide observation state directly; native-world
+        // observation refresh is covered separately by the production roster tests.
+        internal void PrepareSharedDiscovery(MarkerRecord record) { }
         internal List<MarkerRecord> OwnCreatures() => new(Creatures);
         internal bool Contains(MarkerRecord record) => Static.Contains(record) || Creatures.Contains(record);
+        internal bool ContainsDiscovery(string id) => Static.Exists(record => record.id == id && !record.shared && !record.dynamic);
         internal void ReceiveDiscoveries(long peer, List<MarkerRecord> records)
         { foreach(var record in records) { Received[record.id]=record; Applied++; } }
         internal void ReceiveCreatures(long peer, List<MarkerRecord> records, int leaseSeconds=30)

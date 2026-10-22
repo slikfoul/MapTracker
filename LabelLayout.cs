@@ -33,11 +33,11 @@ namespace MapTracker
                 {
                     choices[i] = -1;
                     LabelBox box = preferred[i];
-                    if (Inside(box, viewport) && index.Overlap(box) == 0) choices[i] = 0;
+                    if (Inside(box, viewport) && !index.HasOverlap(box)) choices[i] = 0;
                     else
                     {
                         box = alternate[i];
-                        if (Inside(box, viewport) && index.Overlap(box) == 0) choices[i] = 1;
+                        if (Inside(box, viewport) && !index.HasOverlap(box)) choices[i] = 1;
                     }
                     if (choices[i] < 0) continue;
                     placed[i + 1] = box; index.Add(i + 1);
@@ -72,7 +72,7 @@ namespace MapTracker
                     index.Reset(gap);
                     for (int i = 0; i < boxes.Count; i++)
                     {
-                        previous[i] = boxes[i]; selected[i] = index.Overlap(boxes[i]) == 0;
+                        previous[i] = boxes[i]; selected[i] = !index.HasOverlap(boxes[i]);
                         if (selected[i]) index.Add(i);
                     }
                 }
@@ -200,6 +200,28 @@ namespace MapTracker
                     if (x > 0 && y > 0) area += x * y;
                 }
                 return area;
+            }
+            internal bool HasOverlap(LabelBox candidate)
+            {
+                // Visibility needs only one real intersection, not the sorted
+                // neighbor list and summed area used by displaced placement.
+                // Reuse query stamps so wide labels indexed in several cells
+                // are tested only once.
+                if (query == int.MaxValue) { System.Array.Clear(seen, 0, seen.Length); query = 0; }
+                query++;
+                for (int y = Cell(candidate.Y); y <= Cell(candidate.Y + candidate.Height + gap); y++)
+                    for (int x = Cell(candidate.X); x <= Cell(candidate.X + candidate.Width + gap); x++)
+                        if (cells.TryGetValue(Key(x, y), out var bucket))
+                            foreach (int id in bucket)
+                            {
+                                if (seen[id] == query) continue;
+                                seen[id] = query;
+                                var other = placed[id];
+                                float overlapX = System.Math.Min(candidate.X + candidate.Width + gap, other.X + other.Width + gap) - System.Math.Max(candidate.X, other.X);
+                                float overlapY = System.Math.Min(candidate.Y + candidate.Height + gap, other.Y + other.Height + gap) - System.Math.Max(candidate.Y, other.Y);
+                                if (overlapX > 0 && overlapY > 0 && overlapX * overlapY > 0) return true;
+                            }
+                return false;
             }
         }
         // Candidates arrive in nearest-first order. Keep every label that fits,
