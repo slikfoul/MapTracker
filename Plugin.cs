@@ -10,7 +10,7 @@ namespace MapTracker
     public sealed class Plugin : BaseUnityPlugin
     {
         public const string Guid = "Slikfoul.MapTracker";
-        public const string Version = "1.0.7";
+        public const string Version = "1.0.8";
         internal static Plugin Instance;
         internal ConfigEntry<bool> Enabled, SmallMap, LargeMap, OtherPlayerPins;
         internal ConfigEntry<bool> Hostile, Friendly, Animals, Tamed;
@@ -22,6 +22,8 @@ namespace MapTracker
         internal ConfigEntry<bool> GroupMarkers, GroupCreatures, GroupPlants;
         internal ConfigEntry<bool> ShareMarkers;
         internal ConfigEntry<bool> ShareCreatures;
+        internal ConfigEntry<bool> BlockPresetOffers;
+        internal PresetSharing PresetSharing;
         internal ConfigEntry<int> GroupThreshold, GroupDistance;
         internal ConfigEntry<int> MinimapCreatureIconSize, LargeMapCreatureIconSize;
         internal ConfigEntry<int> MinimapNameDistance, CreatureOutlineThickness;
@@ -67,13 +69,14 @@ namespace MapTracker
                     new ConfigurationManagerAttributes { DispName = "Creature icons on minimap" }));
             ContrastCreatureIcons = Bind("Icons", "Contrast creature icons", true, "Контрастные значки существ", "Add a solid black outline along each creature icon's transparent silhouette on both maps. No circular background, colored copies or clipping. Turn off for plain heads. Stars remain; relationship colors apply in dot mode. Applies when creature icons are enabled.");
             CreatureOutlineThickness = Config.Bind("Icons", "Creature outline thickness", 1, new ConfigDescription("Thickness of the solid black outline along the icon silhouette, in whole UI pixels, on both maps. Requires Contrast creature icons and icon mode. The head itself keeps its chosen size.", new AcceptableValueRange<int>(1, 4)));
-            ContrastObjectIcons = Config.Bind("Icons", "Contrast object icons", true, "Add a solid black silhouette outline to MapTracker's non-creature icons on both maps: portals, dungeons, resources, plants, structures and other objects. Does not change creature icons, marker positions or navigation highlight colors.");
+            ContrastObjectIcons = Config.Bind("Icons", "Contrast object icons", true, "Add a solid black silhouette outline to MapTracker's non-creature icons on both maps: portals, resources, plants, structures and other objects. Dungeon and ruin symbols retain their own built-in outlines without an extra layer. Does not change creature icons, marker positions or navigation highlight colors.");
             ObjectOutlineThickness = Config.Bind("Icons", "Object outline thickness", 1, new ConfigDescription("Black outline thickness for non-creature MapTracker icons, in whole UI pixels, on both maps. Requires Contrast object icons.", new AcceptableValueRange<int>(1, 4)));
             MinimapCreatureIconSize = ConfigSections.Bind(Config, "Icons", "Minimap", "Minimap creature icon size", DefaultSettings.Value("Minimap", "Minimap creature icon size", 26), new ConfigDescription("Creature icon size on the minimap, in UI pixels. Applies to icon mode; colored dot sizes remain unchanged.", new AcceptableValueRange<int>(12, 48), new ConfigurationManagerAttributes { DispName = "Minimap creature icon size" }));
             LargeMapCreatureIconSize = ConfigSections.Bind(Config, "Icons", "Large map", "Large map creature icon size", DefaultSettings.Value("Large map", "Large map creature icon size", 30), new ConfigDescription("Creature icon size on the large map, in UI pixels. Applies at icon-visible zoom; distant colored dots remain unchanged.", new AcceptableValueRange<int>(12, 64), new ConfigurationManagerAttributes { DispName = "Large map creature icon size" }));
             OtherPlayerPins = Bind("Sharing", "Other player pins", true, "Показывать метки других игроков", "Show ordinary player-created pins shared through the game's cartography table. Does not control MapTracker discoveries, creature exchange, navigation destinations, live player positions or your own pins.");
-            ShareMarkers = Bind("Sharing", "Share discoveries", false, "Делиться метками с другими игроками", "Send and receive static discoveries and shared navigation destinations with MapTracker players on this server. Enable on both clients. Independent of Share creature positions; Other player pins only controls ordinary game pins. All remembered local discoveries are eligible, with dungeons and portals sent first. Received discoveries merge without duplicates and follow your Show object and Keep discovered filters. Disabling sharing does not delete retained discoveries. With both Share settings off, MapTracker sends no data, announcements or acknowledgements. No server plugin is required.");
+            ShareMarkers = Bind("Sharing", "Share discoveries", false, "Делиться метками с другими игроками", "Send and receive static discoveries and shared navigation destinations with MapTracker players on this server. Enable on both clients. Independent of Share creature positions; Other player pins only controls ordinary game pins. All remembered local discoveries are eligible, with dungeons and portals sent first. Received discoveries merge without duplicates and follow your Show object and Keep discovered filters. Disabling sharing does not delete retained discoveries. With both Share settings off, automatic discovery and creature exchange sends no data, announcements or acknowledgements. Manual preset offers are sent only on request. No server plugin is required.");
             ShareCreatures = Config.Bind("Sharing", "Share creature positions", false, "Send and receive detected creature positions, levels and relationships with MapTracker players. Enable on both clients. Disabled by default. Independent of Share discoveries and Other player pins. Received creatures follow your creature display filters and disappear when updates stop. Explicit shared navigation targets use Share discoveries and their separate map gesture.");
+            BlockPresetOffers = Config.Bind("Sharing", "Block incoming preset offers", false, "Silently ignore filter preset offers from other players. Disabled by default. Accepted presets are added to your own list without applying them or replacing existing presets. Manual preset sharing is independent of discovery and creature sharing. Opening its recipient list checks compatibility; preset contents are sent only after you choose a player and they accept.");
             DetectionRadius = RadiusSetting.Bind(Config, DrawRadius);
             GroupMarkers = Bind("Grouping", "Group markers", true, "Группировать близкие метки", "Combine overlapping markers of the same type; groups split when zooming in.");
             GroupPlants = Bind("Grouping", "Group plants", false, "Группировать растения", "Group plants, pickables and wild beehives when general marker grouping is enabled. Off keeps each marker at its actual location. Filter presets do not change this setting.");
@@ -122,6 +125,7 @@ namespace MapTracker
             GroupDistance.SettingChanged += (_, __) => Tracking.RequestPinRefresh();
             DetectionRadius.SettingChanged += (_, __) => Tracking.DetectionChanged();
             sharing = new MarkerSharing(this);
+            PresetSharing = new PresetSharing(this);
             PresetRevision = Config.Bind("Internal", "Minimal preset revision", 0,
                 new ConfigDescription("Migration revision for the initial minimal filter set.", null, new ConfigurationManagerAttributes { Browsable = false }));
             ConfigSections.Bind(Config, "General", "Tools", "Open filters", false, new ConfigDescription("Open the searchable category and type selector.", null,
@@ -177,6 +181,7 @@ namespace MapTracker
             try
             {
                 Catalog.Tick();
+                PresetSharing.Tick();
                 Window.Tick();
                 Tracking.Tick();
                 Tracking.HandleNavigationKey();
@@ -208,6 +213,7 @@ namespace MapTracker
         private void OnDestroy()
         {
             Window?.Dispose();
+            PresetSharing?.Reset();
             Tracking?.Dispose();
             CreatureNearbyName.ClearPool();
             CustomCreatureIcons.Dispose();

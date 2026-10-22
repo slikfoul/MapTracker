@@ -63,6 +63,24 @@ namespace MapTracker
             presets.RemoveAll(p => string.Equals(p.name, preset.name, StringComparison.OrdinalIgnoreCase));
             presets.Add(preset); Write(document);
         }
+        public string Import(FilterPreset preset)
+        {
+            if (preset == null || string.IsNullOrWhiteSpace(preset.name) || preset.name.Length > 80 || preset.types == null)
+                throw new ArgumentException("Invalid shared preset.");
+            var document = ReadDocument();
+            string original = preset.name.Trim(), name = original;
+            int suffix = 2;
+            // Built-in names are reserved even when hidden locally.
+            while (Enum.GetNames(typeof(BuiltInFilterPreset)).Contains(name, StringComparer.OrdinalIgnoreCase) ||
+                document.presets.Any(p => string.Equals(p.name, name, StringComparison.OrdinalIgnoreCase)))
+            {
+                string tail = " (" + suffix++ + ")";
+                name = original.Substring(0, Math.Min(original.Length, 80 - tail.Length)) + tail;
+            }
+            document.presets.Add(new FilterPreset { name = name, types = preset.types.ToDictionary(p => p.Key,
+                p => new FilterPresetType { selected = p.Value.selected, keep = p.Value.keep, notify = p.Value.notify }) });
+            Write(document); return name;
+        }
         public bool Delete(string name)
         {
             var document = ReadDocument();

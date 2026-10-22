@@ -18,6 +18,8 @@ namespace MapTracker
         private string selectedPreset;
         private BuiltInFilterPreset? builtInPreset;
         private readonly List<Button> presetButtons = new List<Button>();
+        private readonly List<Button> presetShareButtons = new List<Button>();
+        private string previousShareStatus;
         private readonly List<bool> presetActive = new List<bool>();
         private readonly FilterPresetStore presetStore = new FilterPresetStore(Path.Combine(Paths.ConfigPath, "MapTracker", "presets.json"));
         private void OpenPresets()
@@ -27,7 +29,7 @@ namespace MapTracker
             presetRoot.SetActive(true); presetRoot.transform.SetAsLastSibling();
             PresetAction(() => { RefreshPresets(); presetStatus.text = ""; });
         }
-        private void ClosePresets() { if (presetRoot != null) presetRoot.SetActive(false); }
+        private void ClosePresets() { if (presetRoot != null) presetRoot.SetActive(false); if (sharingMode == "recipients") CloseSharing(); }
         internal bool DismissPresets()
         {
             if (presetRoot == null || !presetRoot.activeSelf) return false;
@@ -40,6 +42,10 @@ namespace MapTracker
             presetLoad.interactable = ready && (builtInPreset.HasValue || selectedPreset != null);
             presetSave.interactable = ready && !string.IsNullOrWhiteSpace(presetName.text);
             presetDelete.interactable = builtInPreset.HasValue || selectedPreset != null;
+            foreach (var button in presetShareButtons) button.interactable = ready && window.Host.Enabled.Value && window.Host.PresetSharing?.Transfer?.Busy == false;
+            string status = window.Host.PresetSharing?.Transfer?.Status;
+            if (!string.IsNullOrEmpty(status) && status != previousShareStatus)
+            { presetStatus.text = status; previousShareStatus = status; }
             if (!ready) presetStatus.text = Plugin.Text("Дождись окончания загрузки каталога.", "Wait for the catalog to finish loading.");
         }
         private void BuildPresets()
@@ -109,6 +115,8 @@ namespace MapTracker
             var saved = snapshot.presets;
             saved.Sort((a, b) => StringComparer.OrdinalIgnoreCase.Compare(a.name, b.name));
             foreach (var button in presetButtons) UnityEngine.Object.Destroy(button.gameObject);
+            foreach (var button in presetShareButtons) UnityEngine.Object.Destroy(button.gameObject);
+            presetShareButtons.Clear();
             presetButtons.Clear(); presetActive.Clear();
             if (!snapshot.deletedBuiltIns.Contains(BuiltInFilterPreset.Default.ToString()))
                 AddPresetButton(Plugin.Text("Дефолт (встроенный)", "Default (built-in)"), null, BuiltInFilterPreset.Default);
@@ -133,7 +141,20 @@ namespace MapTracker
                 presetStatus.text = ""; HighlightPreset();
             });
             button.GetComponentInChildren<Text>().supportRichText = false;
-            StretchTop((RectTransform)button.transform, 4, presetButtons.Count * 42, 4, 38);
+            StretchTop((RectTransform)button.transform, 4, presetButtons.Count * 42, 48, 38);
+            var share = Button(presetContent, "", () => PresetAction(() =>
+            {
+                FilterPreset preset;
+                if (basic.HasValue) { preset = BuiltInFilterPresets.Build(window.Host.Catalog.Entries, basic.Value); preset.name = basic.Value.ToString(); }
+                else preset = presetStore.Read().Find(p => string.Equals(p.name, name, StringComparison.OrdinalIgnoreCase));
+                if (preset == null) throw new InvalidOperationException("Preset no longer exists.");
+                OpenShareRecipients(preset);
+            }));
+            var shareRect = (RectTransform)share.transform;
+            Region(shareRect, new Vector2(1, 1), Vector2.one, new Vector2(-44, -index * 42 - 38), new Vector2(-4, -index * 42));
+            var glyph = Rect("ShareIcon", share.transform); Stretch(glyph, 9, 8, 9, 8);
+            var graphic = glyph.gameObject.AddComponent<SharePresetGraphic>(); graphic.color = Orange; graphic.raycastTarget = false;
+            presetShareButtons.Add(share);
             presetButtons.Add(button);
             presetActive.Add(basic.HasValue ? basic == builtInPreset : !builtInPreset.HasValue &&
                 string.Equals(name, selectedPreset, StringComparison.OrdinalIgnoreCase));

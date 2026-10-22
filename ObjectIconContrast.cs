@@ -9,6 +9,9 @@ namespace MapTracker
         private CreatureContour contour;
         internal void Apply(Graphic graphic, bool enabled, int thickness)
         {
+            // These vector symbols already draw their dark border and interior.
+            // Dilating that complete mesh adds a second border around entrances.
+            enabled = enabled && !(graphic is DungeonGraphic);
             if (target != graphic)
             {
                 if (contour != null) contour.enabled = false;

@@ -10,6 +10,7 @@ namespace MapTracker
         private Minimap map;
         private GameObject root;
         private RectTransform rect;
+        private RectTransform nativePanel;
         private readonly Vector3[] corners = new Vector3[4];
         internal MapFilterButton(FilterWindow filterWindow) { window = filterWindow; }
 
@@ -31,6 +32,7 @@ namespace MapTracker
         {
             Image original = map.m_selectedIconDeath.transform.parent.GetComponent<Image>();
             if (original == null) return;
+            nativePanel = original.transform.parent as RectTransform;
             root = new GameObject("MapTrackerFilters", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(Button));
             root.transform.SetParent(map.m_largeRoot.transform, false);
             root.layer = original.gameObject.layer;
@@ -39,14 +41,22 @@ namespace MapTracker
             Image background = root.GetComponent<Image>();
             // The selection image's parent is the death icon itself, not the panel background.
             // Copying it would put a skull underneath our gear.
-            Image panelBackground = original.transform.parent?.GetComponent<Image>();
+            Image panelBackground = nativePanel != null ? nativePanel.GetComponent<Image>() : null;
+            if (panelBackground == null && nativePanel != null)
+                foreach (var image in nativePanel.GetComponentsInChildren<Image>(true))
+                {
+                    if (image.transform == original.transform || image.transform.IsChildOf(original.transform) ||
+                        map.m_selectedIconBoss != null && image.transform.IsChildOf(map.m_selectedIconBoss.transform.parent)) continue;
+                    Rect bounds = InParent(image.rectTransform, nativePanel);
+                    if (bounds.width >= original.rectTransform.rect.width && bounds.height >= original.rectTransform.rect.height)
+                    { panelBackground = image; break; }
+                }
             background.sprite = panelBackground != null ? panelBackground.sprite : null;
             background.type = panelBackground != null ? panelBackground.type : Image.Type.Simple;
             background.material = panelBackground != null ? panelBackground.material : null;
             background.color = panelBackground != null ? panelBackground.color : new Color(0.15f, 0.15f, 0.15f, 0.85f);
             background.raycastTarget = true;
             Button button = root.GetComponent<Button>();
-            button.targetGraphic = background;
             Button originalButton = original.GetComponent<Button>();
             if (originalButton != null) button.colors = originalButton.colors;
             else
@@ -64,12 +74,16 @@ namespace MapTracker
             icon.layer = root.layer;
             icon.transform.SetParent(root.transform, false);
             RectTransform iconRect = (RectTransform)icon.transform;
-            iconRect.anchorMin = new Vector2(0.17f, 0.17f);
-            iconRect.anchorMax = new Vector2(0.83f, 0.83f);
+            iconRect.anchorMin = new Vector2(0.12f, 0.12f);
+            iconRect.anchorMax = new Vector2(0.88f, 0.88f);
             iconRect.offsetMin = iconRect.offsetMax = Vector2.zero;
             GearGraphic gear = icon.GetComponent<GearGraphic>();
             gear.color = Color.white;
             gear.raycastTarget = false;
+            // Native button colors tint the icon, not the shared dark panel.
+            // Applying their alpha to our backing made it lighter than the controls below.
+            button.targetGraphic = gear;
+            background.canvasRenderer.SetColor(Color.white);
         }
 
         private Rect InParent(RectTransform source, Transform parent)
@@ -91,24 +105,33 @@ namespace MapTracker
             RectTransform original = map.m_selectedIconDeath.transform.parent as RectTransform;
             if (original == null) return;
             Rect control = InParent(original, rect.parent);
-            float size = control.width;
+            float width = control.width, height = control.height;
+            float centerX = control.center.x;
             float top = control.yMax;
-            if (original.parent is RectTransform filterPanel)
-                top = Mathf.Max(top, InParent(filterPanel, rect.parent).yMax);
+            if (nativePanel != null)
+            {
+                Rect panelBounds = InParent(nativePanel, rect.parent);
+                width = Mathf.Clamp(panelBounds.width, control.width, control.width * 1.6f);
+                centerX = panelBounds.center.x;
+                if (map.m_selectedIconBoss?.transform.parent?.parent == nativePanel)
+                    height = Mathf.Clamp(panelBounds.height * 0.5f, control.height, control.height * 1.6f);
+                top = Mathf.Max(top, panelBounds.yMax);
+            }
             if (map.m_selectedIconBoss?.transform.parent is RectTransform boss)
                 top = Mathf.Max(top, InParent(boss, rect.parent).yMax);
-            Vector2 center = new Vector2(control.center.x, top + size * 0.5f + 8f);
+            Vector2 center = new Vector2(centerX, top + height * 0.5f + 8f);
             if (map.m_mapImageLarge != null)
             {
                 Rect area = InParent(map.m_mapImageLarge.rectTransform, rect.parent);
-                float margin = size * 0.6f;
+                float margin = Mathf.Max(width, height) * 0.6f;
                 if (area.width > margin * 2 && area.height > margin * 2)
                 {
-                    center.x = Mathf.Clamp(center.x, area.xMin + margin, area.xMax - margin);
+                    // The native control column already defines the horizontal
+                    // alignment. Clamping it against map padding shifted only the gear.
                     center.y = Mathf.Clamp(center.y, area.yMin + margin, area.yMax - margin);
                 }
             }
-            rect.sizeDelta = new Vector2(size, size);
+            rect.sizeDelta = new Vector2(width, height);
             rect.localPosition = new Vector3(center.x, center.y, 0);
         }
 
@@ -122,7 +145,7 @@ namespace MapTracker
         internal void Dispose()
         {
             if (root != null) Object.Destroy(root);
-            root = null; rect = null; map = null;
+            root = null; rect = nativePanel = null; map = null;
         }
     }
 

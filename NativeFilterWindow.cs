@@ -12,6 +12,7 @@ namespace MapTracker
         private readonly MapFilterButton mapButton;
         private readonly NativeFilterPanel panel;
         internal bool Open { get; private set; }
+        internal bool InputBlocked => Open || panel.SharingModalOpen;
         internal string Search = "", Category = "";
         internal string FocusedKey;
         internal bool KeepOnly, SelectedOnly;
@@ -32,8 +33,9 @@ namespace MapTracker
         {
             mapButton.Tick();
             if (Player.m_localPlayer == null) { Close(); panel.Dispose(); }
-            else if (Open && Input.GetKeyDown(KeyCode.Escape) && !panel.DismissDiscoveries() && !panel.DismissPresets()) Close();
+            else if (Input.GetKeyDown(KeyCode.Escape) && !panel.DismissSharing() && Open && !panel.DismissDiscoveries() && !panel.DismissPresets()) Close();
             if (Open) panel.Tick();
+            if (Player.m_localPlayer != null) panel.TickSharing();
         }
         internal bool ContainsMapButtonPointer() { return mapButton.ContainsPointer(); }
         internal void Dispose() { Close(); panel.Dispose(); mapButton.Dispose(); }
@@ -95,11 +97,11 @@ namespace MapTracker
     [HarmonyPatch(typeof(Player), "TakeInput")]
     internal static class FilterInputPatch
     {
-        private static void Postfix(ref bool __result) { if (Plugin.Instance?.Window?.Open == true) __result = false; }
+        private static void Postfix(ref bool __result) { if (Plugin.Instance?.Window?.InputBlocked == true) __result = false; }
     }
     [HarmonyPatch(typeof(TextInput), "IsVisible")]
     internal static class FilterCursorPatch
     {
-        private static void Postfix(ref bool __result) { if (Plugin.Instance?.Window?.Open == true) __result = true; }
+        private static void Postfix(ref bool __result) { if (Plugin.Instance?.Window?.InputBlocked == true) __result = true; }
     }
 }

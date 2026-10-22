@@ -43,7 +43,7 @@ Adjust black silhouette outline thickness and set creature and other-object font
 
 New profiles use minimap dots with hidden creature names and large-map creature icons with names at close zoom. Existing settings are preserved when updating.
 
-Contrast object icons and Object outline thickness add optional black outlines to portals, dungeons, resources, plants, structures and other non-creature markers on both maps, independently of creature outline settings.
+Contrast object icons and Object outline thickness add optional black outlines to portals, resources, plants, structures and other non-creature markers on both maps, independently of creature outline settings. Dungeon and ruin symbols retain their built-in outlines without an additional layer.
 
 ## Keep crowded maps readable
 
@@ -59,7 +59,7 @@ Choose a discovery radius in whole meters, the full client-loaded area, or **Lin
 
 New discoveries come from objects loaded by your client. Remembered locations remain available according to your filters. Live creature and dropped-item positions are temporary. Discovery autosaves serialize and write a detached snapshot in the background, using atomic replacement and keeping the preceding save as a backup; live creature positions are excluded from these saves.
 
-Save, load or delete built-in and custom presets with **Presets**. The built-in sets are **Default**, **Gathering**, **Exploration** and **Household**. Presets store the filter window's **Show object**, **Keep discovered** and **Notify** choices. Configuration manager preferences remain independent.
+Save, load or delete built-in and custom presets with **Presets**. The built-in sets are **Default**, **Gathering**, **Exploration** and **Household**. Presets store the filter window's **Show object**, **Keep discovered** and **Notify** choices. Configuration manager preferences remain independent. Use the share icon beside any preset to choose an online player. The recipient can accept or decline; acceptance adds a copy to their preset list without applying it or overwriting a same-named preset. The recipient list checks compatibility when opened. Players without a compatible, responding MapTracker build are gray and cannot be selected; hover over a name for the reason. Both players need a build that supports these checks. **Sharing → Block incoming preset offers** silently ignores offers and is off by default. Preset sharing is manual and independent of discovery and creature sharing; there is no background preset broadcast. Progress cards show the transfer percentage on both clients without blocking gameplay, including connection pauses and final save confirmation.
 
 ## Navigate to objects, players or map locations
 
@@ -76,7 +76,7 @@ Navigation pauses its arrival check while teleporting or inside a dungeon. Playe
 
 Sharing requires MapTracker **1.0.3 or later on every participating client**. The current capability protocol does not exchange data with 1.0.0-1.0.2 clients. Update the participating clients together; existing local discoveries and filter settings are preserved.
 
-Discovery sync runs in small acknowledged batches, sends changes instead of restarting the entire database on each presence check, and pauses when the game's outgoing connection is congested. Traffic is capped across all recipients; large discovery databases synchronize gradually in the background. **Share discoveries** enables sending and receiving static discoveries; **Share creature positions** separately enables sending and receiving live creatures. Enable the corresponding setting on both clients. **Other player pins** only shows or hides ordinary player-created pins shared through the game's cartography table; it does not affect mod exchange or mod markers. When both Share settings are off, MapTracker sends no data, handshakes or acknowledgements, regardless of ordinary pin visibility.
+Discovery sync runs in small acknowledged batches, sends changes instead of restarting the entire database on each presence check, and pauses when the game's outgoing connection is congested. Traffic is capped across all recipients; large discovery databases synchronize gradually in the background. **Share discoveries** enables sending and receiving static discoveries; **Share creature positions** separately enables sending and receiving live creatures. Enable the corresponding setting on both clients. **Other player pins** only shows or hides ordinary player-created pins shared through the game's cartography table; it does not affect mod exchange or mod markers. When both Share settings are off, automatic discovery and creature exchange sends no data, handshakes or acknowledgements, regardless of ordinary pin visibility. Manual preset sharing remains available when explicitly requested.
 
 Participating players need MapTracker installed. Enable **Sharing → Share discoveries** on both clients to exchange static discoveries using your own display and retention filters. All remembered local discoveries are eligible; dungeons and portals are sent before other object types. Previously received retained discoveries are kept when sharing is disabled.
 

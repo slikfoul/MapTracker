@@ -138,7 +138,7 @@ namespace MapTracker
             bool typing = selected != null && (selected.GetComponent<UnityEngine.UI.InputField>()?.isFocused == true ||
                 selected.GetComponent<TMPro.TMP_InputField>()?.isFocused == true);
             if ((target == null && sharedTarget == null) || Player.m_localPlayer == null || typing || Chat.instance?.HasFocus() == true ||
-                global::Console.IsVisible() || (!host.Window.Open && TextInput.IsVisible()) || InventoryGui.IsVisible() || Menu.IsVisible()) return;
+                global::Console.IsVisible() || (!host.Window.InputBlocked && TextInput.IsVisible()) || InventoryGui.IsVisible() || Menu.IsVisible()) return;
             if (host.CancelNavigationKey.Value.IsDown()) { ClearTarget(); ClearSharedTarget(); }
         }
         internal bool IsTarget(MarkerRecord record) => record == target;
@@ -192,7 +192,7 @@ namespace MapTracker
                 player.transform.position, target.position, player.InInterior(), player.IsTeleporting(), pointTarget)))) ClearTarget();
             if (sharedTarget != null && (!host.ShareMarkers.Value || (player != null && NavigationArrival.Reached(
                 player.transform.position, sharedTarget.position, player.InInterior(), player.IsTeleporting(), sharedTarget.entry.category == "Navigation")))) ClearSharedTarget();
-            bool showNotice = DiscoveryNotificationHud.CanShow(Minimap.instance, host.Enabled.Value && !host.Window.Open);
+            bool showNotice = DiscoveryNotificationHud.CanShow(Minimap.instance, host.Enabled.Value && !host.Window.InputBlocked);
             notifications.Tick(Time.realtimeSinceStartup, showNotice);
             if (showNotice) creatureSearch.NoticeShown(notifications.Current);
             float hudWidth = (Hud.instance?.m_rootObject?.transform as RectTransform)?.rect.width ?? 1000;
@@ -228,17 +228,17 @@ namespace MapTracker
                 bool visible = host.Enabled.Value && (map.m_mode == Minimap.MapMode.Large ? host.LargeMap.Value : host.SmallMap.Value);
                 if (waypointPin.m_uiElement != null) waypointPin.m_uiElement.gameObject.SetActive(visible);
             }
-            navigation.Apply(map, host.Enabled.Value && !host.Window.Open ? target : null, tracking.Name);
+            navigation.Apply(map, host.Enabled.Value && !host.Window.InputBlocked ? target : null, tracking.Name);
             if (map != null && sharedWaypointPin?.m_iconElement != null)
             {
                 sharedWaypointPin.m_iconElement.color = new Color(0.35f, 0.85f, 1);
                 bool visible = host.Enabled.Value && host.ShareMarkers.Value && (map.m_mode == Minimap.MapMode.Large ? host.LargeMap.Value : host.SmallMap.Value);
                 if (sharedWaypointPin.m_uiElement != null) sharedWaypointPin.m_uiElement.gameObject.SetActive(visible);
             }
-            bool sharedVisible = host.Enabled.Value && host.ShareMarkers.Value && !host.Window.Open;
+            bool sharedVisible = host.Enabled.Value && host.ShareMarkers.Value && !host.Window.InputBlocked;
             sharedNavigation.Apply(map, sharedVisible ? sharedTarget : null, tracking.Name, shared: true, paired: target != null);
-            bool arrows = host.Enabled.Value && host.ShowNavigationArrow.Value && !host.Window.Open;
-            bool searchArrow = host.Enabled.Value && host.ShowCreatureSearchArrow.Value && !host.Window.Open;
+            bool arrows = host.Enabled.Value && host.ShowNavigationArrow.Value && !host.Window.InputBlocked;
+            bool searchArrow = host.Enabled.Value && host.ShowCreatureSearchArrow.Value && !host.Window.InputBlocked;
             int count = ArrowCount(), slot = 0;
             navigationHud.Apply(Minimap.instance, arrows ? target : null, tracking.Name, slot: slot, count: count);
             if (arrows && target != null) slot++;

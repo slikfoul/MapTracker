@@ -737,7 +737,7 @@ namespace MapTracker
             UpdateNearbyNames();
             Discoveries.DrawNavigation(map);
             creatureHover.Apply(pinnedRecords, map, host, Name);
-            playerLayer.Apply(Minimap.instance, host.Enabled.Value && !host.Window.Open);
+            playerLayer.Apply(Minimap.instance, host.Enabled.Value && !host.Window.InputBlocked);
             DiagnoseMinimapNames();
         }
         private void DiagnoseMinimapNames()
@@ -844,7 +844,7 @@ namespace MapTracker
         }
         private bool NavigationAvailable()
         {
-            if (!host.Enabled.Value || map == null || map.m_mode != Minimap.MapMode.Large || host.Window.Open || Player.m_localPlayer == null) return false;
+            if (!host.Enabled.Value || map == null || map.m_mode != Minimap.MapMode.Large || host.Window.InputBlocked || Player.m_localPlayer == null) return false;
             var selected = UnityEngine.EventSystems.EventSystem.current?.currentSelectedGameObject;
             bool typing = selected != null && (selected.GetComponent<UnityEngine.UI.InputField>()?.isFocused == true ||
                 selected.GetComponent<TMPro.TMP_InputField>()?.isFocused == true);
@@ -873,7 +873,7 @@ namespace MapTracker
         }
         internal bool MapClick(bool toggle = true, bool navigation = false, bool clearSelected = false, bool shareTarget = false)
         {
-            if (host.Window.Open) return false;
+            if (host.Window.InputBlocked) return false;
             if (map == null) return true;
             Vector2 pointer = ZInput.pointerPosition;
             if (host.Window.ContainsMapButtonPointer()) return false;

@@ -37,7 +37,8 @@ namespace MapTracker
                 case BuiltInFilterPreset.Default:
                     return entry.dungeon || entry.category == "Portals" || entry.creature ||
                         (entry.category == "Ore" && (entry.products ?? new string[0]).Any(p =>
-                            !string.Equals(p, "Stone", StringComparison.OrdinalIgnoreCase)));
+                            !string.Equals(p, "Stone", StringComparison.OrdinalIgnoreCase) &&
+                            !string.Equals(p, "Grausten", StringComparison.OrdinalIgnoreCase)));
                 case BuiltInFilterPreset.Gathering: return IsGrowingCollectible(entry);
                 case BuiltInFilterPreset.Exploration:
                     return entry.dungeon || entry.category == "Portals" || entry.category == "Locations" ||

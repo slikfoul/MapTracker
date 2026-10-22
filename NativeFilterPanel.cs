@@ -433,14 +433,17 @@ namespace MapTracker
         { rect.anchorMin = rect.anchorMax = rect.pivot = anchor; rect.anchoredPosition = position; rect.sizeDelta = size; }
         internal void Dispose()
         {
+            DisposePresetProgress();
+            CloseSharing();
             if (root != null) UnityEngine.Object.Destroy(root);
             foreach (var sprite in ownedSprites) if (sprite != null) UnityEngine.Object.Destroy(sprite);
             ownedSprites.Clear(); categories.Clear(); categoryKeys.Clear(); rows.Clear(); entries.Clear();
-            presetButtons.Clear(); presetActive.Clear(); discoveryRows.Clear(); discoveries.Clear();
+            presetButtons.Clear(); presetShareButtons.Clear(); presetActive.Clear(); discoveryRows.Clear(); discoveries.Clear();
             root = null; panel = listContent = categoryContent = null;
             list = categoryList = null; summary = footer = null; search = null; keepOnly = selectedOnly = null;
             presetRoot = null; presetContent = null; presetScroll = null; presetName = null; presetStatus = null;
             presetLoad = presetSave = presetDelete = null; selectedPreset = null; builtInPreset = null;
+            previousShareStatus = null;
             discoveryRoot = null; discoveryContent = null; discoveryScroll = null; discoverySearch = null;
             discoveryStatus = null; favoriteFilter = null; favoritesOnly = false;
             previousCount = first = -1; categorySignature = pendingFocus = null;

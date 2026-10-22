@@ -65,7 +65,7 @@ namespace MapTracker
         {
             eligible.Clear(); visible.Clear(); badgeOwners.Clear();
             tooltipMembers = null;
-            if (map.m_mode != Minimap.MapMode.Large || host.Window.Open) Close();
+            if (map.m_mode != Minimap.MapMode.Large || host.Window.InputBlocked) Close();
             foreach (var record in records)
             {
                 record.group = null; record.groupHidden = false;
@@ -130,7 +130,7 @@ namespace MapTracker
                     if (selectedGroup == representative.id && map.m_mode == Minimap.MapMode.Large) continue;
                     member.groupHidden = true;
                 }
-                if (selectedGroup == representative.id && !host.Window.Open && map.m_mode == Minimap.MapMode.Large)
+                if (selectedGroup == representative.id && !host.Window.InputBlocked && map.m_mode == Minimap.MapMode.Large)
                 {
                     selectionVisible = true;
                     tooltipMembers = members;

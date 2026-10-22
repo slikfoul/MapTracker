@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.8
+
+- Share built-in and custom filter presets directly with a selected online player.
+- Accept or decline incoming preset offers. Accepted presets are added without applying them or replacing existing presets.
+- Sender and receiver progress bars with transfer percentages and save confirmation.
+- Optional blocking of incoming preset offers, disabled by default.
+- Map filter gear styled and sized to match the native map controls.
+
 ## 1.0.7
 
 - Added game artwork and model-based icons for trees, containers, plants, resources and world landmarks. Related variants share matching icons.

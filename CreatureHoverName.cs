@@ -12,7 +12,7 @@ namespace MapTracker
         private void Hide() { if (text != null && text.gameObject.activeSelf) text.gameObject.SetActive(false); }
         internal void Apply(IEnumerable<MarkerRecord> records, Minimap map, Plugin host, Func<MarkerRecord, string> name)
         {
-            if (map == null || map.m_mode != Minimap.MapMode.Large || !host.Enabled.Value || !host.LargeMap.Value || host.Window.Open) { Hide(); return; }
+            if (map == null || map.m_mode != Minimap.MapMode.Large || !host.Enabled.Value || !host.LargeMap.Value || host.Window.InputBlocked) { Hide(); return; }
             var canvas = map.m_largeRoot.GetComponentInParent<Canvas>()?.rootCanvas;
             Camera camera = canvas != null && canvas.renderMode != RenderMode.ScreenSpaceOverlay ? canvas.worldCamera : null;
             Vector2 pointer = ZInput.pointerPosition;
