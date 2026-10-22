@@ -21,16 +21,28 @@ namespace MapTracker
                 case "Wolf_cub": return Load("wolf-cub");
                 case "Asksvin_hatchling": return Load("asksvin-hatchling");
                 case "Lox_Calf": return Load("lox-calf");
+                case "FallenWarrior": return Load("fallen-warrior");
+                case "FrozenKing": case "FrozenKing_p2": case "FrozenKing_p3": return Load("frozen-king");
+                case "Frysling": return Load("frysling");
+                case "FrostWisp": return Load("frost-wisp");
+                case "Mistile": return Load("mistile");
+                case "ShadowPerson": return Load("shadow-person");
+                case "staff_greenroots_tentaroot": return Load("thornroot");
+                case "TentaRoot": return Load("tentaroot");
+                case "TentaRoot_wild": return Load("tentaroot-wild");
+                case "Tendril": case "Tendril_back": return Load("tendril");
+                case "Aspect_TentaRoot": return Load("aspect-tentaroot");
                 default: return null;
             }
         }
-        private static Sprite Load(string name)
+        internal static Sprite Load(string name, string group = "CreatureIcons")
         {
-            if (icons.TryGetValue(name, out var cached)) return cached;
+            string cacheKey = group + "/" + name;
+            if (icons.TryGetValue(cacheKey, out var cached)) return cached;
             Texture2D texture = null;
             try
             {
-                using (var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("MapTracker.CreatureIcons." + name + ".png"))
+                using (var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("MapTracker." + group + "." + name + ".png"))
                 {
                     if (stream == null) throw new FileNotFoundException("Embedded creature icon is missing: " + name);
                     using (var bytes = new MemoryStream())
@@ -49,13 +61,13 @@ namespace MapTracker
                     }
                 }
                 var sprite = Sprite.Create(texture, new Rect(0, 0, texture.width, texture.height), new Vector2(0.5f, 0.5f), 100, 0, SpriteMeshType.FullRect);
-                sprite.name = "MapTracker_" + name; icons[name] = sprite; return sprite;
+                sprite.name = "MapTracker_" + name; icons[cacheKey] = sprite; return sprite;
             }
             catch (Exception e)
             {
                 if (texture != null) UnityEngine.Object.Destroy(texture);
-                icons[name] = null;
-                Plugin.Instance?.Report("Could not load creature icon " + name, e);
+                icons[cacheKey] = null;
+                Plugin.Instance?.Report("Could not load map icon " + group + "/" + name, e);
                 return null;
             }
         }

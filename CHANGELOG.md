@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.7
+
+- Added game artwork and model-based icons for trees, containers, plants, resources and world landmarks. Related variants share matching icons.
+- Added native trophy icons for related creature variants, including young and summoned creatures, boss aspects and special variants.
+- Added model-based portraits for creatures without suitable trophy artwork, including Fallen Warrior, Frozen King and Frysling.
+- Charred Twitchers now use the native Charred Skull icon.
+- Training dummies now use their native construction icon.
+- Moved Ashlands ruins from Dungeons to Locations and added a distinct ruined-arch icon.
+- Preserved existing native map markers for boss locations, traders and other locations already marked by the game.
+
 ## 1.0.6
 
 - Charred Fortress in the Dungeons category with a fortress map symbol and dungeon discovery notifications.

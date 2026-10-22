@@ -108,7 +108,7 @@ namespace MapTracker
                     var cached = DataJson.Read<CatalogDocument>(File.ReadAllText(ExportPath, Encoding.UTF8));
                     if (cached?.schema == 1 && cached.entries != null)
                         foreach (var entry in cached.entries)
-                            if (entry != null && !string.IsNullOrEmpty(entry.key)) cachedTypes[entry.key] = entry;
+                            if (entry != null && !string.IsNullOrEmpty(entry.key) && !CatalogContent.IsServiceDefinition(entry)) cachedTypes[entry.key] = entry;
                 }
             }
             catch (Exception e) { host.Report("Cached catalog could not be read; collecting fresh definitions", e); }
@@ -127,7 +127,7 @@ namespace MapTracker
             foreach (GameObject prefab in definitions)
             {
                 if (current != ZNetScene.instance) yield break;
-                try { Add(ReadPrefab(prefab), Prefabs); }
+                try { Add(ReadPrefab(prefab), Prefabs, prefab); }
                 catch (Exception e) { warnings.Add(prefab.name + ": " + e.Message); }
                 Status = prefab.name;
                 Processed++;
@@ -168,9 +168,11 @@ namespace MapTracker
             Export();
         }
 
-        private void Add(CatalogEntry entry, Dictionary<int, CatalogEntry> index)
+        private void Add(CatalogEntry entry, Dictionary<int, CatalogEntry> index, GameObject prefab = null)
         {
+            if (CatalogContent.IsServiceDefinition(entry)) return;
             BindSettings(entry);
+            if (!entry.creature && entry.Icon == null) entry.Icon = ObjectIconResolver.Resolve(entry, prefab);
             Entries.Add(entry); index[entry.prefab.GetStableHashCode()] = entry; liveTypes[entry.key] = entry;
         }
         internal CatalogEntry GetSavedDefinition(string key)
@@ -184,6 +186,7 @@ namespace MapTracker
                 var prefab = string.IsNullOrEmpty(cached.prefab) ? null : ZNetScene.instance?.GetPrefab(cached.prefab);
                 cached.Icon = cached.creature ? CreatureIconResolver.Resolve(prefab, cached.prefab) :
                     prefab?.GetComponent<Piece>()?.m_icon ?? prefab?.GetComponent<ItemDrop>()?.m_itemData.GetIcon();
+                if (!cached.creature && cached.Icon == null) cached.Icon = ObjectIconResolver.Resolve(cached, prefab);
             }
             return cached;
         }
@@ -213,12 +216,14 @@ namespace MapTracker
             }
             finally { host.Config.SaveOnConfigSet = autosave; }
         }
-        // An open-air dungeon has no Teleport/DungeonGenerator component. Keep its
-        // native location key and settings while normalizing fresh and cached entries.
+        // Explicit location semantics override component-based detection, including
+        // nested dungeon components in ruins. Preserve native keys and saved settings.
         internal static void ClassifyLocation(CatalogEntry entry)
         {
             if (entry?.key == "location:CharredFortress" && entry.prefab == "CharredFortress")
             { entry.category = "Dungeons"; entry.dungeon = true; }
+            else if (entry?.key == "location:AshlandRuins" && entry.prefab == "AshlandRuins")
+            { entry.category = "Locations"; entry.dungeon = false; }
         }
         internal void ApplyMinimalPreset()
         {

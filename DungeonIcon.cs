@@ -8,6 +8,8 @@ namespace MapTracker
     {
         private DungeonGraphic graphic;
         internal Graphic Graphic => graphic;
+        internal static bool HasSymbol(CatalogEntry entry)
+            => entry != null && (entry.dungeon || entry.key == "location:AshlandRuins" && entry.prefab == "AshlandRuins");
         internal void Update(Minimap.PinData pin, string prefab)
         {
             if (graphic != null && graphic.transform.parent != pin.m_uiElement) { UnityEngine.Object.Destroy(graphic.gameObject); graphic = null; }
@@ -31,13 +33,14 @@ namespace MapTracker
         internal static int Kind(string prefab)
         {
             string name = (prefab ?? "").ToLowerInvariant();
+            if (name == "ashlandruins") return 4;
             if (name.Contains("boss") || name.Contains("fortress") || name.Contains("tower")) return 3;
             if (name.Contains("mistlands") || name.Contains("mine")) return 2;
             if (name.Contains("cave") || name.Contains("hole") || name.Contains("morgen") || name == "troll") return 1;
             return 0;
         }
     }
-    // Code-native icon silhouettes: outlined arch, cave, crossed picks and tower.
+    // Code-native icon silhouettes: outlined arch, cave, crossed picks, tower and ruined arch.
     public sealed class DungeonGraphic : MaskableGraphic
     {
         internal int Kind;
@@ -70,6 +73,20 @@ namespace MapTracker
                 Shape(mesh, color, -.7f,.4f, -.7f,.77f, -.53f,.77f, -.53f,.4f);
                 Shape(mesh, color, .53f,.4f, .53f,.77f, .7f,.77f, .7f,.4f);
                 Shape(mesh, dark, -.27f,-.85f, -.27f,-.22f, 0,-.03f, .27f,-.22f, .27f,-.85f);
+            }
+            else if (Kind == 4)
+            {
+                // Uneven stone supports and a broken gable distinguish ruins from dungeon entrances.
+                Shape(mesh, dark, -.87f,-.96f, -.87f,.33f, -.39f,.33f, -.39f,-.96f);
+                Shape(mesh, dark, .39f,-.96f, .39f,.2f, .87f,.2f, .87f,-.96f);
+                Shape(mesh, dark, -.98f,.27f, -.12f,1f, .04f,.7f, -.68f,.07f);
+                Shape(mesh, dark, .14f,.69f, .39f,.78f, .98f,.21f, .69f,.01f);
+                Shape(mesh, color, -.73f,-.82f, -.73f,.25f, -.53f,.25f, -.53f,-.82f);
+                Shape(mesh, color, .53f,-.82f, .53f,.12f, .73f,.12f, .73f,-.82f);
+                Shape(mesh, color, -.78f,.25f, -.16f,.79f, -.13f,.68f, -.67f,.22f);
+                Shape(mesh, color, .32f,.61f, .38f,.61f, .77f,.23f, .69f,.19f);
+                Shape(mesh, dark, -.24f,-.98f, -.19f,-.67f, .03f,-.73f, .08f,-.98f);
+                Shape(mesh, color, -.12f,-.86f, -.1f,-.81f, -.04f,-.83f, -.02f,-.86f);
             }
             else
             {

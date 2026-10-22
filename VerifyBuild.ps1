@@ -10,7 +10,7 @@ $plugin = [Mono.Cecil.AssemblyDefinition]::ReadAssembly("$PSScriptRoot\bin\Relea
 $gameAssembly = [Mono.Cecil.AssemblyDefinition]::ReadAssembly("$Game\valheim_Data\Managed\assembly_valheim.dll")
 $guiAssembly = [Mono.Cecil.AssemblyDefinition]::ReadAssembly("$Game\valheim_Data\Managed\assembly_guiutils.dll")
 try {
-    foreach ($iconName in @('bat', 'hen', 'chick', 'boar-young', 'wolf-cub', 'asksvin-hatchling', 'lox-calf')) {
+    foreach ($iconName in @('bat', 'hen', 'chick', 'boar-young', 'wolf-cub', 'asksvin-hatchling', 'lox-calf', 'fallen-warrior', 'frozen-king', 'frysling', 'frost-wisp', 'mistile', 'shadow-person', 'thornroot', 'tentaroot', 'tentaroot-wild', 'tendril', 'aspect-tentaroot')) {
         $iconResource = $plugin.MainModule.Resources | Where-Object Name -EQ ("MapTracker.CreatureIcons.$iconName.png") | Select-Object -First 1
         if ($null -eq $iconResource) { throw "Missing embedded creature icon: $iconName" }
         $iconBytes = $iconResource.GetResourceData()
@@ -122,7 +122,7 @@ try {
     Write-Output 'PASS: no Jotunn or ValueTuple dependency; runtime dependency files exist; Harmony targets and network registry field match.'
     Write-Output 'PASS: shared pin ownership, map backup, routed RPC and separate manual migration integration verified.'
     Write-Output 'This static check does not validate in-game behavior.'
-    Write-Output 'PASS: seven embedded PNG icons and the native game decoder signature verified.'
+    Write-Output 'PASS: embedded creature PNG icons and the native game decoder signature verified.'
     Write-Output 'PASS: portal destruction event, loaded-area readiness and sector network-object APIs verified.'
     $sharing = $plugin.MainModule.Types | Where-Object Name -EQ 'MarkerSharing' | Select-Object -First 1
     $networkWriters = @($sharing.Methods | Where-Object {

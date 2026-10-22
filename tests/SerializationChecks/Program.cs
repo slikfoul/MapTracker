@@ -34,6 +34,17 @@ Check(old.markers != null && old.markers.Count == 0, "old metadata-only saves re
 // Run the production lifetime transitions without the Unity scene/Harmony bootstrap.
 var lifetimeType = typeof(MarkerFile).Assembly.GetType("MapTracker.MarkerLifetime");
 var lifetimeFlags = System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic;
+// Both network prefab variants use the actual native Charred Skull item, not the death marker.
+var creatureIcons = typeof(MarkerFile).Assembly.GetType("MapTracker.CreatureIconResolver");
+var explicitIconItem = creatureIcons.GetMethod("ExplicitItemPrefab", lifetimeFlags);
+foreach (var prefab in new[] { "Charred_Twitcher", "Charred_Twitcher_Summoned" })
+{
+    Check((string)explicitIconItem.Invoke(null, new object[] { prefab }) == "Charredskull",
+        prefab + " selects the native Charred Skull item portrait");
+}
+Check(new[] { "UnknownCreature", "Bat", "Hen", "Boar_piggy", "Charred_Melee", null }
+    .All(prefab => explicitIconItem.Invoke(null, new object[] { prefab }) == null),
+    "other creatures retain their existing trophy and custom portrait selection");
 var destroyedMethod = lifetimeType.GetMethod("Destroyed", lifetimeFlags);
 var cleanupMethod = lifetimeType.GetMethod("RemoveDestroyedPortals", lifetimeFlags);
 var recordFlags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
@@ -275,6 +286,57 @@ var choices = ((System.Collections.IEnumerable)buildFilters.Invoke(null, new obj
 var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
 var membersField = filterType.GetField("Members", flags);
 var labelField = filterType.GetField("Label", flags);
+var serviceMethod = typeof(MarkerFile).Assembly.GetType("MapTracker.CatalogContent").GetMethod("IsServiceDefinition", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+bool ServiceDefinition(CatalogEntry entry) => (bool)serviceMethod.Invoke(null, new object[] { entry });
+var serviceExamples = new[]
+{
+    new CatalogEntry { key = "prefab:Abomination_attack1", prefab = "Abomination_attack1", name = "Swing attack", category = "Dropped items", components = new[] { "ItemDrop" } },
+    new CatalogEntry { key = "prefab:Spawner_Skeleton", prefab = "Spawner_Skeleton", name = "Spawner_Skeleton", category = "Other", components = new[] { "CreatureSpawner" } },
+    new CatalogEntry { key = "prefab:DG_ForestCrypt", prefab = "DG_ForestCrypt", name = "DG_ForestCrypt", category = "Other", components = new[] { "DungeonGenerator" } },
+    new CatalogEntry { key = "prefab:BlackForestLocationMusic", prefab = "BlackForestLocationMusic", name = "BlackForestLocationMusic", category = "Other", components = new[] { "MusicLocation" } }
+};
+Check(serviceExamples.All(ServiceDefinition), "internal attack, invisible spawn point, dungeon generator and music definitions are excluded");
+var serviceChoices = ((System.Collections.IEnumerable)buildFilters.Invoke(null, new object[] { serviceExamples, new Func<CatalogEntry, string>(e => e.name) })).Cast<object>().ToList();
+Check(serviceChoices.Count == 0, "old cached internal definitions cannot reappear as filter rows");
+Check(new[] { "Spawner_GreydwarfNest", "Spawner_DraugrPile", "Spawner_CharredCross", "BonePileSpawner" }.All(name =>
+    !ServiceDefinition(new CatalogEntry { key = "prefab:" + name, prefab = name, category = "Destructibles", components = new[] { "SpawnArea", "Destructible" } })),
+    "visible nests, body piles and effigies remain trackable");
+Check(!ServiceDefinition(new CatalogEntry { key = "location:DG_ForestCrypt", prefab = "DG_ForestCrypt", dungeon = true, components = new[] { "DungeonGenerator" } }) &&
+      !ServiceDefinition(new CatalogEntry { key = "prefab:Spawner_VisibleModObject", prefab = "Spawner_VisibleModObject", components = new[] { "CreatureSpawner", "Destructible" } }),
+    "real dungeon locations and visible modded spawn objects are preserved");
+var objectIconType = typeof(MarkerFile).Assembly.GetType("MapTracker.ObjectIconResolver");
+var hasObjectIcon = objectIconType.GetMethod("HasAssignment", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+var hasNativeMarker = objectIconType.GetMethod("HasNativeMarker", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+bool HasObjectIcon(string key) => (bool)hasObjectIcon.Invoke(null, new object[] { key });
+Check(new[] { "FimbulvinterOrb", "blackmarble_altar_crystal", "crypt_skeleton_chest", "FernAshlands", "vines", "goblin_bed", "Ashwood_Sapling", "Ygga_Sapling", "Ancient_Sapling", "Autumn_Birch_Sapling" }
+    .All(name => HasObjectIcon("prefab:" + name)), "all reported missing world objects and modded saplings have an embedded icon assignment");
+Check(new[] { "location:Hildir_camp", "location:Vendor_BlackForest", "location:AncientUpgradeStation", "location:FaderLocation", "prefab:Player_tombstone" }
+    .All(key => !HasObjectIcon(key) && (bool)hasNativeMarker.Invoke(null, new object[] { key })), "boss altars, traders, the ancient upgrade station and player tombstones retain native map markers without added object icons");
+Check(ServiceDefinition(new CatalogEntry { key = "prefab:Wolf_Attack1", prefab = "Wolf_Attack1", category = "Dropped items", components = new[] { "ItemDrop" } }) &&
+      !ServiceDefinition(new CatalogEntry { key = "prefab:Hammer", prefab = "Hammer", category = "Dropped items", components = new[] { "ItemDrop" } }),
+    "known native NPC attacks are excluded while the real player hammer remains supported");
+using (var iconPlanStream = typeof(MarkerFile).Assembly.GetManifestResourceStream("MapTracker.ObjectIcons.catalog.json"))
+using (var iconPlanReader = new StreamReader(iconPlanStream))
+{
+    var iconPlan = Newtonsoft.Json.Linq.JObject.Parse(iconPlanReader.ReadToEnd());
+    var bindings = iconPlan["icons"].Children().ToList();
+    var keys = bindings.Select(b => (string)b["key"]).ToList();
+    var excludedKeys = iconPlan["excluded"].Select(x => (string)x).ToHashSet();
+    var nativeKeys = iconPlan["nativeMarkers"].Select(x => (string)x).ToHashSet();
+    Check(keys.Count > 0 && keys.Count == keys.Distinct(StringComparer.Ordinal).Count() && !keys.Any(k => excludedKeys.Contains(k) || nativeKeys.Contains(k)),
+        "world icon assignments are unique and separate from internal helpers and preserved native markers");
+    foreach (string source in bindings.Select(b => (string)b["source"]).Where(s => s.StartsWith("model:")).Distinct())
+    {
+        using var png = typeof(MarkerFile).Assembly.GetManifestResourceStream("MapTracker.ObjectIcons." + source.Substring(6) + ".png");
+        if (png == null) throw new Exception("Missing model portrait resource: " + source);
+        var header = new byte[26];png.ReadExactly(header);
+        if (header[0] != 137 || header[1] != 80 || header[2] != 78 || header[3] != 71 || header[25] != 6)
+            throw new Exception("Invalid transparent PNG resource: " + source);
+    }
+    Check(true, "every referenced world-model icon is embedded as a transparent PNG");
+    Check(bindings.Single(b => (string)b["key"] == "location:Mistlands_Excavation1")["source"].ToString() == "item:Softtissue",
+        "related item references retain the native case-sensitive prefab identity");
+}
 Check(choices.Count == 5, "duplicate names merge, distinct creatures/resources/categories remain separate, technical effects are excluded");
 var skeletonChoice = choices.Single(c => (string)labelField.GetValue(c) == "Skeleton");
 var skeletonMembers = (List<CatalogEntry>)membersField.GetValue(skeletonChoice);
@@ -310,8 +372,29 @@ var fortressPart = new CatalogEntry { key = "prefab:Ashlands_Fortress_Gate", pre
 classifyLocation.Invoke(null, new object[] { normalRuin }); classifyLocation.Invoke(null, new object[] { fortressPart });
 Check(!normalRuin.dungeon && normalRuin.category == "Locations" && !fortressPart.dungeon && fortressPart.category == "Other",
     "fortress classification does not turn Ashlands ruins or individual wall and gate parts into extra dungeons");
+var ashlandRuins = DataJson.Read<CatalogEntry>("{\"key\":\"location:AshlandRuins\",\"prefab\":\"AshlandRuins\",\"name\":\"AshlandRuins\",\"source\":\"ZoneSystem\",\"category\":\"Dungeons\",\"dungeon\":true}");
+classifyLocation.Invoke(null, new object[] { ashlandRuins });
+classifyLocation.Invoke(null, new object[] { ashlandRuins });
+Check(!ashlandRuins.dungeon && ashlandRuins.category == "Locations" && ashlandRuins.key == "location:AshlandRuins" &&
+    ashlandRuins.prefab == "AshlandRuins" && ashlandRuins.name == "AshlandRuins",
+    "cached Ashlands ruins move out of Dungeons idempotently without changing saved type or filter identity");
+var ruinsRecord = new MarkerRecord { id = "ruins:1", type = ashlandRuins.key, visited = true, completed = true, favorite = true };
+recordEntry.SetValue(ruinsRecord, ashlandRuins);
+var notificationRuleForRuins = typeof(MarkerFile).Assembly.GetType("MapTracker.DiscoveryNotification").GetMethod("Allowed", lifetimeFlags);
+Check(!(bool)notificationRuleForRuins.Invoke(null, new object[] { ruinsRecord, true, false }) &&
+    (bool)notificationRuleForRuins.Invoke(null, new object[] { ruinsRecord, false, true }) &&
+    ruinsRecord.visited && ruinsRecord.completed && ruinsRecord.favorite,
+    "reclassified ruins follow per-type Notify instead of New dungeons while keeping existing marker progress");
 int fortressKind = (int)typeof(MarkerFile).Assembly.GetType("MapTracker.DungeonIcon").GetMethod("Kind", lifetimeFlags).Invoke(null, new object[] { "CharredFortress" });
 Check(fortressKind == 3, "the fortress uses the existing battlement-and-gate silhouette on maps, filter rows and navigation icons");
+var locationSymbols = typeof(MarkerFile).Assembly.GetType("MapTracker.DungeonIcon");
+var hasLocationSymbol = locationSymbols.GetMethod("HasSymbol", lifetimeFlags);
+int ruinKind = (int)locationSymbols.GetMethod("Kind", lifetimeFlags).Invoke(null, new object[] { ashlandRuins.prefab });
+Check(ruinKind == 4 && ruinKind != fortressKind &&
+    (bool)hasLocationSymbol.Invoke(null, new object[] { ashlandRuins }) && !ashlandRuins.dungeon &&
+    (bool)hasLocationSymbol.Invoke(null, new object[] { charredFortress }) &&
+    !(bool)hasLocationSymbol.Invoke(null, new object[] { normalRuin }),
+    "Ashlands ruins retain a distinct map/filter/navigation symbol without acquiring dungeon semantics or changing unrelated locations");
 var fortressRecord = new MarkerRecord { id = "fortress:1", type = charredFortress.key, visited = true, completed = true, favorite = true };
 recordEntry.SetValue(fortressRecord, charredFortress);
 bool fortressNotifies = (bool)typeof(MarkerFile).Assembly.GetType("MapTracker.DiscoveryNotification").GetMethod("Allowed", lifetimeFlags)
@@ -413,7 +496,7 @@ if (args.Length > 0 && args[0] != "--save-benchmark")
         if (!identities.Add(members[0].category + "\n" + (string)labelField.GetValue(choice))) throw new Exception("Duplicate grouped identity in installed catalog.");
         retained += members.Count;
     }
-    Check(retained == actualCatalog.entries.Count(e => !e.technical), "all filterable prefab definitions are retained in the full installed catalog");
+    Check(retained == actualCatalog.entries.Count(e => !e.technical && !ServiceDefinition(e)), "all supported filterable prefab definitions are retained in the full installed catalog");
     Check(true, "no duplicate row identities across the full installed catalog");
     System.Console.WriteLine("Catalog audit: " + actualCatalog.entries.Count + " definitions -> " + actualChoices.Count + " grouped choices.");
 }

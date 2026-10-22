@@ -34,9 +34,9 @@ namespace MapTracker
             if (root.anchoredPosition != anchored) root.anchoredPosition = anchored;
             var dimensions = new Vector2(size, size);
             if (root.sizeDelta != dimensions) root.sizeDelta = dimensions;
-            bool isDungeon = target.entry?.dungeon == true;
-            image.enabled = !isDungeon; dungeon.gameObject.SetActive(isDungeon);
-            if (isDungeon)
+            bool hasSymbol = DungeonIcon.HasSymbol(target.entry);
+            image.enabled = !hasSymbol; dungeon.gameObject.SetActive(hasSymbol);
+            if (hasSymbol)
             {
                 int kind = DungeonIcon.Kind(target.entry.prefab);
                 if (kind != dungeonKind) { dungeonKind = kind; dungeon.Kind = kind; dungeon.SetVerticesDirty(); }
@@ -44,8 +44,6 @@ namespace MapTracker
             else
             {
                 var sprite = target.entry?.Icon;
-                if (sprite == null && target.entry?.creature == true)
-                    sprite = map.m_icons.Find(icon => icon.m_name == Minimap.PinType.Death).m_icon;
                 if (sprite == null) sprite = target.pin?.m_icon;
                 if (sprite == null)
                 {

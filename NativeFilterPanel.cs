@@ -227,7 +227,7 @@ namespace MapTracker
             foreach (var category in categories) UnityEngine.Object.Destroy(category);
             categories.Clear(); categoryKeys.Clear();
             var groups = new List<string> { "" };
-            groups.AddRange(window.Host.Catalog.Entries.Where(e => !e.technical).Select(e => e.category).Distinct().OrderBy(FilterWindow.GroupName));
+            groups.AddRange(window.Host.Catalog.Entries.Where(e => !e.technical && !CatalogContent.IsServiceDefinition(e)).Select(e => e.category).Distinct().OrderBy(FilterWindow.GroupName));
             for (int i = 0; i < groups.Count; i++)
             {
                 string group = groups[i];
@@ -284,11 +284,11 @@ namespace MapTracker
                     row.Root.GetComponent<Image>().color = focused ? new Color(0.35f, 0.22f, 0.07f, 0.95f) : new Color(0, 0, 0, 0.2f);
                     row.Text.color = focused ? Orange : Beige;
                     row.Icon.sprite = row.Entry.Icon ?? CategoryIcon(row.Entry.Members[0].category);
-                    bool dungeon = row.Entry.Members[0].dungeon;
-                    row.Icon.gameObject.SetActive(dungeon || row.Icon.sprite != null);
-                    row.Icon.enabled = !dungeon;
-                    row.Dungeon.gameObject.SetActive(dungeon);
-                    if (dungeon) { row.Dungeon.Kind = DungeonIcon.Kind(row.Entry.Members[0].prefab); row.Dungeon.SetVerticesDirty(); }
+                    bool hasSymbol = DungeonIcon.HasSymbol(row.Entry.Members[0]);
+                    row.Icon.gameObject.SetActive(hasSymbol || row.Icon.sprite != null);
+                    row.Icon.enabled = !hasSymbol;
+                    row.Dungeon.gameObject.SetActive(hasSymbol);
+                    if (hasSymbol) { row.Dungeon.Kind = DungeonIcon.Kind(row.Entry.Members[0].prefab); row.Dungeon.SetVerticesDirty(); }
                 }
             }
             finally { updating = false; }
@@ -336,7 +336,7 @@ namespace MapTracker
         {
             Minimap map = Minimap.instance;
             if (map == null) return null;
-            Minimap.PinType type = category == "Creatures" || category == "Dungeons" ? Minimap.PinType.Death :
+            Minimap.PinType type = category == "Dungeons" ? Minimap.PinType.Death :
                 category == "Player structures" || category == "Portals" || category == "Locations" ? Minimap.PinType.Icon1 : Minimap.PinType.Icon3;
             return map.m_icons.FirstOrDefault(icon => icon.m_name == type).m_icon;
         }

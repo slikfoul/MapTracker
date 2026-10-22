@@ -675,7 +675,8 @@ namespace MapTracker
                     float baseZoom = large ? 0.1f : 0.01f;
                     float size = large ? Mathf.Clamp(7f * Mathf.Sqrt(baseZoom / Mathf.Max(zoom, 0.0001f)), 3f, 12f) :
                         Mathf.Clamp(10f * Mathf.Sqrt(baseZoom / Mathf.Max(zoom, 0.0001f)), 6f, 16f);
-                    Sprite sprite = record.entry.Icon ?? map.m_icons.FirstOrDefault(i => i.m_name == Minimap.PinType.Death).m_icon;
+                    // Unknown creatures keep their relationship-colored dot instead of a player-death marker.
+                    Sprite sprite = record.entry.Icon;
                     bool showHead = sprite != null && CreatureDisplay.ShowHead(large,
                         Player.m_localPlayer != null ? Utils.DistanceXZ(record.position, Player.m_localPlayer.transform.position) : float.MaxValue,
                         zoom, map.m_minZoom, map.m_showNamesZoom, large ? host.CreatureIcons.Value : host.MinimapCreatureIcons.Value);
@@ -688,7 +689,7 @@ namespace MapTracker
                     int starCount = record.shared ? record.creatureLevel - 1 : record.character != null ? record.character.GetLevel() - 1 : 0;
                     record.stars.Update(pin.m_uiElement, starCount, size);
                 }
-                else if (record.entry.dungeon)
+                else if (DungeonIcon.HasSymbol(record.entry))
                 {
                     float size = map.m_mode == Minimap.MapMode.Large ? 24f : 18f;
                     SetPinSize(pin.m_uiElement, size);
@@ -698,7 +699,7 @@ namespace MapTracker
                 if (!record.entry.creature)
                 {
                     if (record.objectContrast == null) record.objectContrast = new ObjectIconContrast();
-                    record.objectContrast.Apply(record.entry.dungeon ? record.dungeonIcon.Graphic : pin.m_iconElement,
+                    record.objectContrast.Apply(DungeonIcon.HasSymbol(record.entry) ? record.dungeonIcon.Graphic : pin.m_iconElement,
                         host.ContrastObjectIcons.Value, host.ObjectOutlineThickness.Value);
                 }
             }

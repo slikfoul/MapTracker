@@ -19,7 +19,7 @@ namespace MapTracker
         internal bool Contains(string key) => Members.Any(e => e.key == key);
         internal static List<FilterChoice> Build(IEnumerable<CatalogEntry> source, Func<CatalogEntry, string> label)
         {
-            return source.Where(e => !e.technical).GroupBy(e => e.category + "\n" + label(e))
+            return source.Where(e => !e.technical && !CatalogContent.IsServiceDefinition(e)).GroupBy(e => e.category + "\n" + label(e))
                 .Select(g => new FilterChoice { Members = g.ToList(), Label = label(g.First()) }).OrderBy(c => c.Label).ToList();
         }
     }

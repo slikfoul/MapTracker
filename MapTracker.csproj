@@ -4,7 +4,7 @@
     <AssemblyName>MapTracker</AssemblyName>
     <RootNamespace>MapTracker</RootNamespace>
     <LangVersion>latest</LangVersion>
-    <Version>1.0.6</Version>
+    <Version>1.0.7</Version>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
     <CopyLocalDependenciesWhenTargetingNetFx>false</CopyLocalDependenciesWhenTargetingNetFx>
@@ -16,6 +16,8 @@
   <ItemGroup>
     <EmbeddedResource Include="assets/defaults/settings.json" LogicalName="MapTracker.DefaultSettings.json" />
     <EmbeddedResource Include="assets/creature-icons/*.png" LogicalName="MapTracker.CreatureIcons.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="assets/object-icons/*.png" LogicalName="MapTracker.ObjectIcons.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="assets/object-icons/catalog.json" LogicalName="MapTracker.ObjectIcons.catalog.json" />
     <Compile Remove="tests/**/*.cs" />
     <Compile Remove="migration/**/*.cs" />
     <Compile Remove="artifacts/**/*.cs" />
