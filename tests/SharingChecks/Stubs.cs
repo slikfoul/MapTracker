@@ -73,6 +73,7 @@ namespace MapTracker
         internal void PrepareSharedDiscovery(MarkerRecord record) { }
         internal List<MarkerRecord> OwnCreatures() => new(Creatures);
         internal bool Contains(MarkerRecord record) => Static.Contains(record) || Creatures.Contains(record);
+        internal bool ContainsOutboundDiscovery(MarkerRecord record) => Contains(record);
         internal bool ContainsDiscovery(string id) => Static.Exists(record => record.id == id && !record.shared && !record.dynamic);
         internal void ReceiveDiscoveries(long peer, List<MarkerRecord> records)
         { foreach(var record in records) { Received[record.id]=record; Applied++; } }

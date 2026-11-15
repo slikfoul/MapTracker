@@ -20,6 +20,8 @@ The catalog includes creatures, portals, dungeons, ore, plants, containers, drop
 
 Portals display their tags. Dungeon entrances have distinct symbols, visited states and manual completion marks. Portals and dungeons are remembered by default. Observed portal destruction removes its marker; old portal locations are checked again when you revisit them. Separate settings control collected plants, depleted ore and completed dungeons.
 
+Right-click a portal marker on the large map to remove it locally. This does not destroy the portal or send a removal through Share discoveries. The marker returns when you detect the portal again or another player shares a current sighting; an archived discovery alone does not restore it.
+
 ## Dungeon states
 
 - **White:** discovered, but not yet entered.

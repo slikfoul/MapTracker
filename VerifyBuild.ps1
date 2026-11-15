@@ -229,7 +229,7 @@ try {
     Write-Output 'PASS: Other player pins affects native pin masking only; mod networking and marker visibility are independent.'
     $save = $tracking.Methods | Where-Object Name -EQ 'Save' | Select-Object -First 1
     $saveCalls = @($save.Body.Instructions | Where-Object { $_.Operand -is [Mono.Cecil.MethodReference] } | ForEach-Object { $_.Operand.DeclaringType.Name + '.' + $_.Operand.Name })
-    if ($saveCalls -notcontains 'SavedMarkerPreparation.Prepare' -or $saveCalls -contains 'DiscoverySave.Snapshot' -or
+    if ($saveCalls -notcontains 'SavedMarkerPreparation.PrepareWithRetirements' -or $saveCalls -contains 'DiscoverySave.Snapshot' -or
         $saveCalls -contains 'DataJson.Write' -or $saveCalls -contains 'File.WriteAllText') { throw 'Game save path must schedule bounded preparation without a whole-archive clone or serialization.' }
     $advanceSave = $tracking.Methods | Where-Object Name -EQ 'AdvanceSavePreparation' | Select-Object -First 1
     if (-not ($advanceSave.Body.Instructions | Where-Object {

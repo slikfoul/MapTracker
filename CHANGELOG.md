@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.10
+
+- Right-click portal markers to remove them locally without sharing the removal; a new sighting restores the marker.
+
+- Portal removals synchronize between players and persist across world reloads.
+
 ## 1.0.9
 
 - Stable player availability and hover hints in the preset-sharing recipient list.

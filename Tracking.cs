@@ -66,6 +66,8 @@ namespace MapTracker
         public int schema = 1;
         public string world, character;
         public List<MarkerRecord> markers = new List<MarkerRecord>();
+        public List<PortalDeletion> removedPortals = new List<PortalDeletion>();
+        public List<string> locallyHiddenPortals = new List<string>();
     }
 
     internal sealed class Tracking : IDisposable
@@ -87,6 +89,8 @@ namespace MapTracker
         private readonly HashSet<MarkerRecord> remoteStaticRecords = new HashSet<MarkerRecord>();
         private readonly List<MarkerRecord> expiredRemote = new List<MarkerRecord>();
         private readonly DiscoveryRoster discoveryRoster = new DiscoveryRoster();
+        private readonly PortalRetirements portalRetirements = new PortalRetirements();
+        private readonly HashSet<string> locallyHiddenPortals = new HashSet<string>();
         private float nextMovingPinRefresh;
         private readonly List<KeyValuePair<ZDO, ZNetView>> snapshotBuffer = new List<KeyValuePair<ZDO, ZNetView>>();
         private readonly HashSet<MarkerRecord> pinChanges = new HashSet<MarkerRecord>();
@@ -99,8 +103,10 @@ namespace MapTracker
         internal readonly DiscoveryTools Discoveries;
         internal IEnumerable<MarkerRecord> Records => records.Values;
         internal bool Contains(MarkerRecord record) => MarkerLifetime.Current(records, record);
-        internal bool ContainsDiscovery(string id) => id != null && records.TryGetValue(id, out var record) &&
+        internal bool ContainsDiscovery(string id) => portalRetirements.Contains(id) ||
+            id != null && records.TryGetValue(id, out var record) &&
             !record.dynamic && !record.shared && CatalogContent.CanTrack(record.entry);
+        internal bool ContainsOutboundDiscovery(MarkerRecord record) => portalRetirements.Current(record) || Contains(record);
         internal MarkerRecord FindNavigationObject(string id, string type, Vector3? position = null)
         {
             if (string.IsNullOrEmpty(type) || type.StartsWith("navigation:", StringComparison.Ordinal)) return null;
@@ -143,7 +149,6 @@ namespace MapTracker
         private readonly PortalReconciliation portalReconciliation = new PortalReconciliation();
         private readonly List<MarkerRecord> portalCandidates = new List<MarkerRecord>();
         private readonly HashSet<MarkerRecord> portalRecords = new HashSet<MarkerRecord>();
-        private readonly List<ZDO> nearbyPortalData = new List<ZDO>();
         private float nextPortalCheck;
         private float pendingDeadline;
         private IEnumerator<byte> savedPreparation;
@@ -321,6 +326,7 @@ namespace MapTracker
             bool shareDetection = host.Enabled.Value &&
                 (!dynamic && host.ShareMarkers.Value || entry.creature && host.ShareCreatures.Value);
             string id = zdo.m_uid.ToString();
+            if (entry.category == "Portals" && portalRetirements.Contains(id)) return true;
             if (!entry.dungeon && !entry.Selected.Value && !shareDetection && !records.ContainsKey(id)) return true;
             Vector3 position = rootPosition;
             if (entry.dungeon)
@@ -341,6 +347,7 @@ namespace MapTracker
                 if (!sight.Check(view, position, Player.m_localPlayer, out visibleNow)) return false;
                 if (!visibleNow && !records.ContainsKey(id)) return true;
             }
+            if (entry.category == "Portals") RestoreLocallyHiddenPortal(id);
             bool newIdentity = !records.TryGetValue(id, out var record);
             bool newDiscovery = false;
             if (newIdentity)
@@ -348,7 +355,7 @@ namespace MapTracker
                 if (entry.dungeon)
                     record = DungeonDiscoveries.RebindTracked(records, id, entry, position, RemovePin,
                         previousId => host.sharing?.ForgetDiscovery(previousId));
-                if (record == null && !dynamic)
+                if (record == null && !dynamic && entry.category != "Portals")
                     record = discoveryIndex != null ? discoveryIndex.Find(entry.key, position) : SharedDiscoveries.Find(records, id, entry.key, position);
                 if (record != null)
                 {
@@ -432,10 +439,16 @@ namespace MapTracker
         {
             try
             {
-                if (!records.TryGetValue(zdo.m_uid.ToString(), out var record)) return;
+                if (!records.TryGetValue(zdo.m_uid.ToString(), out var record))
+                {
+                    if (!loaded || !host.Catalog.Prefabs.TryGetValue(zdo.GetPrefab(), out var definition) || definition.category != "Portals") return;
+                    record = new MarkerRecord { id = zdo.m_uid.ToString(), type = definition.key,
+                        position = zdo.GetPosition(), entry = definition };
+                }
                 record.nameCache = null;
                 if (record.entry == null) record.entry = host.Catalog.GetSavedDefinition(record.type);
-                dirty |= MarkerLifetime.Destroyed(records, record.id, ForgetRecord);
+                if (record.entry?.category == "Portals") RetirePortal(record);
+                else dirty |= MarkerLifetime.Destroyed(records, record.id, ForgetRecord);
                 if (Contains(record)) pinChanges.Add(record);
                 receivedPinChanges = true;
             }
@@ -455,10 +468,8 @@ namespace MapTracker
                 if (Contains(record) && PortalReconciliation.Eligible(record)) portalCandidates.Add(record);
             if (portalCandidates.Count == 0) return;
 
-            // Read network data independently of selection, detection radius and
-            // line of sight. Uninstantiated but valid portals must also survive.
-            nearbyPortalData.Clear();
-            manager.FindSectorObjects(ZoneSystem.GetZone(player.transform.position), new SimulationDistance(1, 0), nearbyPortalData);
+            // Check the exact native identity, independently of selection or
+            // sight. A new portal at the same position cannot keep an old ID alive.
             bool changed = false;
             foreach (var record in portalCandidates)
             {
@@ -475,16 +486,10 @@ namespace MapTracker
                     {
                         var remembered = manager.GetZDO(new ZDOID(user, id));
                         exists = remembered != null && remembered.IsValid() && IsPortalData(remembered);
-                        if (!exists)
-                            foreach (var zdo in nearbyPortalData)
-                            {
-                                if (!zdo.IsValid() || (zdo.GetPosition() - record.position).sqrMagnitude >= 1f) continue;
-                                if (IsPortalData(zdo)) { exists = true; break; }
-                            }
                     }
                 }
                 if (!portalReconciliation.Check(record.id, ready, exists, now)) continue;
-                ForgetRecord(record); dirty = changed = true;
+                RetirePortal(record); changed = true;
             }
             if (changed) RefreshPins();
         }
@@ -607,6 +612,7 @@ namespace MapTracker
                 if (!CatalogContent.CanTrack(entry) || entry.creature || entry.category == "Dropped items") continue;
                 if (!entry.dungeon) { record.dungeonOrigin = null; record.dungeonAliases = null; }
                 record.entry = entry;
+                if (HandlePortalState(record)) continue;
                 Predicate<MarkerRecord> allow = entry.dungeon && record.dungeonOrigin.HasValue ?
                     new Predicate<MarkerRecord>(candidate => CanMergeDungeon(candidate, record.dungeonOrigin.Value)) : null;
                 var existing = SharedDiscoveries.Resolve(records, record, index, allow);
@@ -927,7 +933,7 @@ namespace MapTracker
             if (RectTransformUtility.RectangleContainsScreenPoint(map.m_mapImageLarge.rectTransform, ZInput.pointerPosition, camera))
                 MapClick(navigation: select, shareTarget: share);
         }
-        internal bool MapClick(bool toggle = true, bool navigation = false, bool clearSelected = false, bool shareTarget = false)
+        internal bool MapClick(bool toggle = true, bool navigation = false, bool clearSelected = false, bool shareTarget = false, bool removePortal = false)
         {
             if (host.Window.InputBlocked) return false;
             if (map == null) return true;
@@ -962,6 +968,14 @@ namespace MapTracker
                     selected.type?.StartsWith("navigation:", StringComparison.Ordinal) == true ? selected.entry?.key ?? selected.type : selected.type ?? selected.entry?.key, selected.id);
                 else if (DiscoveryTools.TryMapPosition(map, pointer, out var position))
                     host.sharing.SendNavigationTarget(position, "Map destination");
+                return false;
+            }
+            if (removePortal && !navigation && !waypointHit && closest?.entry?.category == "Portals")
+            {
+                grouping.Close();
+                if (Discoveries.IsTarget(closest)) Discoveries.ClearTarget();
+                if (Discoveries.IsSharedObject(closest)) Discoveries.ClearSharedTarget();
+                HidePortalLocally(closest); RequestPinRefresh();
                 return false;
             }
             if (clearSelected && NavigationAvailable() && (waypointHit ||
@@ -1061,17 +1075,34 @@ namespace MapTracker
                 using (var input = new StreamReader(savePath, Encoding.UTF8, true, 16384))
                     file = DataJson.ReadFrom<MarkerFile>(input);
                 if (file == null || file.schema != 1 || file.world != world || file.character != character) return;
+                if (file.locallyHiddenPortals != null)
+                    foreach (string id in file.locallyHiddenPortals)
+                        if (PortalRetirements.ValidId(id)) locallyHiddenPortals.Add(id);
+                if (file.removedPortals != null)
+                    foreach (var deletion in file.removedPortals)
+                        if (deletion != null && PortalRetirements.ValidId(deletion.id) &&
+                            !string.IsNullOrEmpty(deletion.type) && deletion.type.Length <= 256 && PlayerNavigation.Finite(deletion.position))
+                            portalRetirements.Add(new MarkerRecord { id = deletion.id, type = deletion.type, position = deletion.position });
                 if (file.markers == null) return;
                 foreach (var record in file.markers)
                 {
                     if (record == null || string.IsNullOrEmpty(record.id) || string.IsNullOrEmpty(record.type)) continue;
-                    records[record.id] = record;
+                    if (!locallyHiddenPortals.Contains(record.id)) records[record.id] = record;
                 }
             }
             catch (Exception e) { host.Report("Saved markers could not be loaded; original file retained", e); savePath = null; }
         }
         private IEnumerable<byte> PrepareSavedMarkers()
         {
+            foreach (var deletion in portalRetirements.Records.ToArray())
+            {
+                deletion.entry = host.Catalog.GetSavedDefinition(deletion.type);
+                // Preserve unknown definitions for temporarily missing content mods.
+                if (deletion.entry != null && deletion.entry.category != "Portals")
+                { portalRetirements.Remove(deletion.id); dirty = true; }
+                else if (deletion.entry != null) discoveryRoster.Update(deletion);
+                yield return 0;
+            }
             var saved = records.Values.ToList();
             foreach (var record in saved)
             {
@@ -1080,8 +1111,8 @@ namespace MapTracker
                 if (entry == null && record.imported && record.type.StartsWith("legacy:", StringComparison.Ordinal))
                     entry = host.Catalog.GetLegacyDungeon(record.type.Substring("legacy:".Length));
                 if (entry != null && entry != record.entry) { RemovePin(record); record.entry = entry; record.nameCache = null; }
-                if (record.collected && record.entry?.category == "Portals")
-                { ForgetRecord(record); dirty = true; }
+                if (record.entry?.category == "Portals" && (record.collected || portalRetirements.Contains(record.id)))
+                { RetirePortal(record); }
                 yield return 0;
             }
             foreach (var step in DungeonDiscoveries.RemoveDuplicatesIncrementally(records, ForgetRecord, () => dirty = true)) yield return step;
@@ -1104,8 +1135,8 @@ namespace MapTracker
             {
                 pendingSavePath = savePath;
                 string destination = savePath;
-                savePreparation = SavedMarkerPreparation.Prepare(world, character, records.Values,
-                    file => pendingSave = DiscoverySave.WritePreparedAsync(destination, file)).GetEnumerator();
+                savePreparation = SavedMarkerPreparation.PrepareWithRetirements(world, character, records.Values, portalRetirements.Records,
+                    file => pendingSave = DiscoverySave.WritePreparedAsync(destination, file), locallyHiddenPortals).GetEnumerator();
                 dirty = false; nextSave = Time.realtimeSinceStartup + 10;
                 return true;
             }
@@ -1153,6 +1184,50 @@ namespace MapTracker
             record.pin = null;
         }
         private void ForgetRecord(MarkerRecord record) => MarkerLifetime.Forget(records, record, ReleaseRecord);
+        // A map click forgets only this client's marker; it is not evidence that
+        // the world object was destroyed and must never enter the deletion ledger.
+        private bool HidePortalLocally(MarkerRecord record)
+        {
+            if (record?.entry?.category != "Portals" || !Contains(record) || !PortalRetirements.ValidId(record.id)) return false;
+            locallyHiddenPortals.Add(record.id);
+            ForgetRecord(record);
+            dirty = true; receivedPinChanges = true;
+            return true;
+        }
+        private void RestoreLocallyHiddenPortal(string id)
+        {
+            if (locallyHiddenPortals.Remove(id)) dirty = true;
+        }
+        private bool HandlePortalState(MarkerRecord record)
+        {
+            if (record.entry?.category != "Portals") return false;
+            if (!PortalRetirements.ValidId(record.id)) return true;
+            if (record.collected) { RetirePortal(record); return true; }
+            if (portalRetirements.Contains(record.id)) return true;
+            if (locallyHiddenPortals.Contains(record.id))
+            {
+                // Archived discoveries are not positive sightings. Only the
+                // observing peer (or our own loaded-world scan) may restore it.
+                if (!record.observed) return true;
+                RestoreLocallyHiddenPortal(record.id);
+            }
+            return false;
+        }
+        private void RetirePortal(MarkerRecord source)
+        {
+            bool known = portalRetirements.Contains(source.id);
+            var deletion = portalRetirements.Add(source);
+            if (deletion == null) return;
+            RestoreLocallyHiddenPortal(source.id);
+            if (records.TryGetValue(source.id, out var current) && current.entry?.category == "Portals")
+            { ForgetRecord(current); dirty = true; receivedPinChanges = true; }
+            discoveryRoster.Update(deletion);
+            if (!known)
+            {
+                dirty = true;
+                host?.sharing?.PrioritizeDiscovery(deletion);
+            }
+        }
         private void ReleaseRecord(MarkerRecord record)
         {
             RemovePin(record);
@@ -1176,13 +1251,15 @@ namespace MapTracker
             RemovePins(); records.Clear(); pinChanges.Clear(); snapshotBuffer.Clear(); snapshot = null; discoveryIndex = null; pendingEntrance = null;
             pinnedRecords.Clear(); dynamicRecords.Clear(); liveRecords.Clear(); remoteStaticRecords.Clear(); expiredRemote.Clear();
             portalRecords.Clear(); discoveryRoster.Clear();
+            portalRetirements.Clear();
+            locallyHiddenPortals.Clear();
             nextMovingPinRefresh = 0; receivedPinChanges = false;
             Discoveries.Reset();
             creatureNameGroups.Reset();
             grouping.Dispose(); creatureHover.Dispose();
             if (manager != null) manager.m_onZDODestroyed -= Destroyed;
             manager = null; loaded = false; dirty = false; map = null;
-            portalReconciliation.Clear(); portalCandidates.Clear(); nearbyPortalData.Clear(); nextPortalCheck = 0;
+            portalReconciliation.Clear(); portalCandidates.Clear(); nextPortalCheck = 0;
             savedPreparation?.Dispose(); savedPreparation = null; definitionsResolved = false;
             pinPreparation?.Dispose(); pinPreparation = null; archiveTurn = true;
             ResetNameDiagnostics();
@@ -1224,7 +1301,7 @@ namespace MapTracker
             var tracking = Plugin.Instance?.Tracking;
             if (tracking?.ShareNavigationMouse(KeyCode.Mouse1) == true) return tracking.MapClick(shareTarget: true);
             bool navigation = tracking?.NavigationMouse(KeyCode.Mouse1) == true;
-            return tracking?.MapClick(navigation, navigation, clearSelected: true) ?? true;
+            return tracking?.MapClick(navigation, navigation, clearSelected: true, removePortal: !navigation) ?? true;
         }
     }
     [HarmonyPatch(typeof(Minimap), "OnMapMiddleClick")]

@@ -50,6 +50,9 @@ namespace MapTracker
             SharedDiscoveryIndex index, Predicate<MarkerRecord> allow = null)
         {
             records.TryGetValue(incoming.id, out var exact);
+            // Portals are built objects with stable native IDs, not location
+            // entrances. A rebuilt portal must never inherit the old one's ID.
+            if (incoming.entry?.category == "Portals") return exact;
             var aliasOwner = index?.FindAlias(incoming.id);
             if (aliasOwner != null && aliasOwner.type == incoming.type && (allow == null || allow(aliasOwner)) &&
                 (!aliasOwner.dungeonOrigin.HasValue || Vector3.Distance(aliasOwner.dungeonOrigin.Value, incoming.position) <= 100f) &&
@@ -144,6 +147,7 @@ namespace MapTracker
             {
                 var record = ordered[i].Record;
                 if (!MarkerLifetime.Current(records, record)) { yield return 0; continue; }
+                if (record.entry.category == "Portals") { index.Add(record); yield return 0; continue; }
                 var canonical = index.FindSite(record.type, record.position, record.dungeonOrigin);
                 if (canonical == null) { index.Add(record); yield return 0; continue; }
                 if (ReferenceEquals(canonical, record)) { yield return 0; continue; }

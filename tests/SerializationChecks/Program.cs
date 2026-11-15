@@ -176,10 +176,10 @@ Check(combined.Count == 4 && nearbyEntrance.shared,
     "different nearby entrances, known dungeon types and floors retain individual discoveries");
 var sharedPortalEntry = new CatalogEntry { key = "prefab:portal_wood", category = "Portals" };
 var sharedPortal = ReceiveShared(SharedRecord("ally-portal", sharedPortalEntry, new Vector3(-2.01f, 0, 8)), index: mergeIndex);
-var namedPortal = SharedRecord("other-peer-portal", sharedPortalEntry, new Vector3(-1.99f, 0, 8));
+var namedPortal = SharedRecord("ally-portal", sharedPortalEntry, new Vector3(-1.99f, 0, 8));
 namedPortal.portalTag = "South";
 Check(ReceiveShared(namedPortal, peer: 2, index: mergeIndex) == sharedPortal && sharedPortal.portalTag == "South" && combined.Count == 5,
-    "shared portal aliases across a negative-coordinate cell boundary merge and update their tag");
+    "the same native portal ID across a negative-coordinate cell boundary updates its tag");
 var oreEntry = new CatalogEntry { key = "prefab:MineRock_Copper", category = "Ore" };
 var oreShared = ReceiveShared(SharedRecord("ally-ore", oreEntry, new Vector3(20, 3, 10)), index: mergeIndex);
 Check(ReceiveShared(SharedRecord("local-ore-alias", oreEntry, new Vector3(20, 3, 10)), index: mergeIndex) == oreShared && combined.Count == 6,
@@ -1109,7 +1109,7 @@ Check(indexFind.Invoke(movingIndex, new object[] { movable.type, movable.positio
     indexFind.Invoke(movingIndex, new object[] { sharedPortalEntry.key, movable.position }) == null,
     "retiring an indexed object releases both spatial aliases");
 
-var archived = Enumerable.Range(0, 18000).Select(i => SharedRecord("archive:" + i, sharedPortalEntry,
+var archived = Enumerable.Range(0, 18000).Select(i => SharedRecord("archive:" + i, oreEntry,
     new Vector3(i % 180 * 8, 0, i / 180 * 8))).ToList();
 var retainedIndex = Activator.CreateInstance(indexType, recordFlags, null, new object[] { archived }, null);
 Action<MarkerRecord> updateIndex = (Action<MarkerRecord>)indexAdd.CreateDelegate(typeof(Action<MarkerRecord>), retainedIndex);
@@ -1130,7 +1130,7 @@ Check(incrementalBytes < rebuildBytes / 100,
 System.Console.WriteLine($"INDEX BENCHMARK: rebuild30={rebuildMilliseconds:0.00}ms/{rebuildBytes}bytes; incremental30={benchmark.Elapsed.TotalMilliseconds:0.00}ms/{incrementalBytes}bytes. This is a managed-code benchmark, not in-game FPS.");
 
 var startupRecords = archived.ToDictionary(r => r.id);
-var oldDuplicate = SharedRecord("zz-startup-duplicate", sharedPortalEntry, archived[0].position);
+var oldDuplicate = SharedRecord("zz-startup-duplicate", oreEntry, archived[0].position);
 oldDuplicate.completed = true;
 startupRecords.Add(oldDuplicate.id, oldDuplicate);
 int cleanupChanges = 0;
@@ -1149,14 +1149,14 @@ Check(cleanupItems > 18001 && cleanupChanges == 1 && startupRecords.Count == 180
 Check(!cleanupSteps.MoveNext() && cleanupChanges == 1,
     "completed duplicate reconciliation cannot repeatedly remove or merge records");
 var startupConcurrent=new Dictionary<string,MarkerRecord>();
-var earlierMemory=SharedRecord("early:memory",sharedPortalEntry,new Vector3(24,0,48));
+var earlierMemory=SharedRecord("early:memory",oreEntry,new Vector3(24,0,48));
 earlierMemory.favorite=true;earlierMemory.visited=true;startupConcurrent.Add(earlierMemory.id,earlierMemory);
 var startupIndex=Activator.CreateInstance(indexType,recordFlags,null,new object[]{Array.Empty<MarkerRecord>()},null);
 int concurrentChanges=0;
 var concurrentCleanup=((IEnumerable<byte>)incrementalCleanup.Invoke(null,
     new object[]{startupConcurrent,removePin,(Action)(()=>concurrentChanges++),null,startupIndex})).GetEnumerator();
 Check(concurrentCleanup.MoveNext(),"archive preparation yields before a nearby live observation is added");
-var earlyLive=SharedRecord("early:live",sharedPortalEntry,earlierMemory.position);
+var earlyLive=SharedRecord("early:live",oreEntry,earlierMemory.position);
 typeof(MarkerRecord).GetField("live",recordFlags).SetValue(earlyLive,true);startupConcurrent.Add(earlyLive.id,earlyLive);
 indexAdd.Invoke(startupIndex,new object[]{earlyLive});
 while(concurrentCleanup.MoveNext()){}
@@ -1172,6 +1172,9 @@ Check(startupConcurrent.Count==1&&concurrentChanges==1,
 // UI references stay null; real dictionary, working sets and spatial index are exercised.
 var trackingType = typeof(MarkerFile).Assembly.GetType("MapTracker.Tracking");
 var lifecycleTracking = System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(trackingType);
+var retirementsType = typeof(MarkerFile).Assembly.GetType("MapTracker.PortalRetirements");
+trackingType.GetField("portalRetirements",recordFlags).SetValue(lifecycleTracking,Activator.CreateInstance(retirementsType,true));
+trackingType.GetField("locallyHiddenPortals",recordFlags).SetValue(lifecycleTracking,new HashSet<string>());
 var lifecycleRecords = new Dictionary<string, MarkerRecord>();
 trackingType.GetField("records", recordFlags).SetValue(lifecycleTracking, lifecycleRecords);
 var lifecycleSets = new Dictionary<string, HashSet<MarkerRecord>>();

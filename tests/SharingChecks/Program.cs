@@ -399,6 +399,37 @@ static class Checks
         growingDelta.Select(growingRows,1,false);growingRows.Add(Record(2));
         Check(growingDelta.Select(growingRows,1.001f,false).Any(r=>r.id=="123:2"),
             "new discoveries changing source membership immediately bypass an idle pause");
+        var deletionNetwork=new Network(2);
+        deletionNetwork.Clients[0].Host.Tracking.Static=Enumerable.Range(1,10000).Select(Record).ToList();
+        deletionNetwork.Run(3);
+        var deletion=Record(1);deletion.collected=true;
+        deletionNetwork.Clients[0].Host.Tracking.Static[0]=deletion;
+        deletionNetwork.Clients[0].Context();deletionNetwork.Clients[0].Sharing.PrioritizeDiscovery(deletion);
+        int lostDeletionAcks=0;
+        deletionNetwork.Drop=s=>s.Method.EndsWith("Processed.v3") && lostDeletionAcks++<2;
+        deletionNetwork.Run(30);
+        Check(deletionNetwork.Clients[1].Host.Tracking.Received[deletion.id].collected,
+            "portal deletion uses acknowledged discovery delivery and retries during a large archive transfer");
+        var rebuilt=Record(10001);rebuilt.position=deletion.position;
+        deletionNetwork.Clients[0].Host.Tracking.Static.Add(rebuilt);
+        deletionNetwork.Clients[0].Context();deletionNetwork.Clients[0].Sharing.PrioritizeDiscovery(rebuilt);
+        deletionNetwork.Run(20);
+        Check(deletionNetwork.Clients[1].Host.Tracking.Received.ContainsKey(rebuilt.id)&&
+            !deletionNetwork.Clients[1].Host.Tracking.Received[rebuilt.id].collected,
+            "new portal ID at the same position is transmitted independently of the old deletion");
+        deletionNetwork.Clients[0].Host.ShareMarkers.Value=false;
+        deletionNetwork.Clients[0].Host.ShareCreatures.Value=false;
+        int deletionTraffic=deletionNetwork.Sent.Count(s=>s.Source==1);
+        deletionNetwork.Run(35);
+        Check(deletionNetwork.Sent.Count(s=>s.Source==1)==deletionTraffic,
+            "pending portal deletion traffic stops completely when sharing is disabled");
+        var offlineDeletion=new Network(2);offlineDeletion.Clients[0].Host.Tracking.Static.Add(deletion);
+        offlineDeletion.Clients[1].Online=false;offlineDeletion.Run(10);
+        offlineDeletion.Clients[1].Online=true;offlineDeletion.Run(40);
+        Check(offlineDeletion.Clients[1].Host.Tracking.Received.TryGetValue(deletion.id,out var lateDeletion)&&lateDeletion.collected,
+            "persisted portal deletions are delivered to a player who connects later");
+        Check(deletionNetwork.Sent.Where(IsData).All(s=>Encoding.UTF8.GetByteCount(s.Json)<=4096),
+            "deletions and rebuilt portals obey the existing packet size budget");
         System.Console.WriteLine("Sharing transport checks passed: "+passed);
     }
 }

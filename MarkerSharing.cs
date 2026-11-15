@@ -169,7 +169,7 @@ namespace MapTracker
             {
                 if (peers.Count >= 32) return;
                 peers.Add(sender, peer = new SharingPeer()); order.Add(sender);
-                peer.Static.Current = host.Tracking.Contains;
+                peer.Static.Current = host.Tracking.ContainsOutboundDiscovery;
                 peer.Static.Retained = host.Tracking.ContainsDiscovery;
                 peer.Static.Prepare = host.Tracking.PrepareSharedDiscovery;
             }
@@ -194,7 +194,7 @@ namespace MapTracker
         { if (SameWorld(sender, announcement)) Remember(sender, announcement); }
         internal void PrioritizeDiscovery(MarkerRecord record)
         {
-            if (!Interested || !host.ShareMarkers.Value || record == null || record.shared || record.dynamic || !host.Tracking.Contains(record)) return;
+            if (!Interested || !host.ShareMarkers.Value || record == null || record.shared || record.dynamic || !host.Tracking.ContainsOutboundDiscovery(record)) return;
             foreach (var peer in peers.Values) if (peer.AcceptsDiscoveries) peer.Static.Prioritize(record);
         }
         internal void ForgetDiscovery(string id)

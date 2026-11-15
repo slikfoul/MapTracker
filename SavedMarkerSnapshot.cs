@@ -61,6 +61,8 @@ namespace MapTracker
         public int schema = 1;
         public string world, character;
         public IEnumerable<SavedMarkerSnapshot> markers;
+        public List<PortalDeletion> removedPortals = new List<PortalDeletion>();
+        public List<string> locallyHiddenPortals = new List<string>();
 
         // The generic reflection serializer boxes every primitive saved field.
         // A large archive therefore allocates again on every worker write, even
@@ -105,7 +107,25 @@ namespace MapTracker
                     }
                     writer.WriteEndObject();
                 }
-                writer.WriteEndArray(); writer.WriteEndObject();
+                writer.WriteEndArray();
+                writer.WritePropertyName("removedPortals"); writer.WriteStartArray();
+                if (removedPortals != null)
+                {
+                    foreach (var deletion in removedPortals)
+                    {
+                        writer.WriteStartObject();
+                        writer.WritePropertyName("id"); writer.WriteValue(deletion.id);
+                        writer.WritePropertyName("type"); writer.WriteValue(deletion.type);
+                        writer.WritePropertyName("position"); WritePosition(writer, deletion.position);
+                        writer.WriteEndObject();
+                    }
+                }
+                writer.WriteEndArray();
+                writer.WritePropertyName("locallyHiddenPortals"); writer.WriteStartArray();
+                if (locallyHiddenPortals != null)
+                    foreach (string id in locallyHiddenPortals) writer.WriteValue(id);
+                writer.WriteEndArray();
+                writer.WriteEndObject();
             }
         }
         private static void WritePosition(Newtonsoft.Json.JsonTextWriter writer, Vector3 point)
@@ -120,6 +140,20 @@ namespace MapTracker
 
     internal static class SavedMarkerPreparation
     {
+        internal static IEnumerable<byte> PrepareWithRetirements(string world, string character,
+            IEnumerable<MarkerRecord> records, IEnumerable<MarkerRecord> retirements, Action<SavedMarkerFile> completed,
+            IEnumerable<string> locallyHiddenPortals = null)
+        {
+            var hidden = locallyHiddenPortals?.ToList() ?? new List<string>();
+            var deleted = new List<PortalDeletion>();
+            foreach (var record in retirements.ToArray())
+            {
+                deleted.Add(new PortalDeletion { id = record.id, type = record.type, position = record.position });
+                yield return 0;
+            }
+            foreach (var step in Prepare(world, character, records, file => { file.removedPortals = deleted; file.locallyHiddenPortals = hidden; completed(file); }))
+                yield return step;
+        }
         // Only the reference snapshot is copied at once. Row copying, cache
         // validation and allocation are bounded by the existing frame scheduler.
         internal static IEnumerable<byte> Prepare(string world, string character,
